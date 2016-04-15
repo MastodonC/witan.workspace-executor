@@ -8,3 +8,10 @@
     `(let [~name ~expr
            ~@(interleave (repeat name) (map pstep (partition 2 clauses)))]
        ~name)))
+
+(defn find-dupes
+  [coll]
+  (->> coll
+       (reduce #(assoc %1 %2 (inc (%1 %2 0))) {})
+       (keep (fn [[i c]] (when (> c 1) i)))
+       (not-empty)))

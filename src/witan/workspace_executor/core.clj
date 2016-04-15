@@ -7,31 +7,19 @@
             [rhizome.viz :as viz]
             [taoensso.timbre :as log]
             ;;
-            [witan.workspace-executor.schema :as as]))
+            [witan.workspace-executor.schema :as as]
+            [witan.workspace-executor.utils :as utils]))
 
-(defn- validate-workspace
-  [{:keys [workflow contracts catalog]}]
-  (let [workflow* (set workflow)]
-    (let [catalog-names (->> catalog
-                             (map :witan/name)
-                             (set))
-          diff (not-empty (clojure.set/difference workflow* catalog-names))]
-      (when diff
-        (throw (IllegalArgumentException. (str "One or more workflow entries are unrepresented in the catalog: " diff)))))
-    (let [contract-miss (->> workflow*
-                             (keep (fn [a] (some #(when (= (:witan/name %) a) ((juxt :witan/fn :witan/version) %)) catalog)))
-                             (keep (fn [[fn-name fn-version]]
-                                     (some #(when-not (or (= (:witan/fn %) fn-name)
-                                                          (= (:witan/version %) fn-version)) [fn-name fn-version]) contracts)))
-                             (vec))]
-      (when (not-empty contract-miss)
-        (throw (IllegalArgumentException. (str "There are no contracts for the following function + version combinations " contract-miss)))))))
+(defn- get-contract
+  [{:keys [catalog contracts]} id]
+  (let [catalog-entry          (get-catalog-entry catalog id)
+        fnc                    (:witan/fn catalog-entry)
+        version                (:witan/version catalog-entry)]
+    (some #(when (and (= (:witan/fn %) fnc) (= (:witan/version %) version)) %) contracts)))
 
-(def leaf?
-  #(not (contains? % :to)))
-
-(def root?
-  #(not (contains? % :from)))
+(defn- get-catalog-entry
+  [catalog id]
+  (some #(when (= (:witan/name %) id) %) catalog))
 
 (s/defn workflow->long-hand-workflow
   [wf :- as/Workflow]
@@ -51,16 +39,159 @@
                                         (conj a x))) [] with-leaves)]
     (into (sorted-map) with-froms)))
 
-(defn- get-catalog-entry
-  [catalog id]
-  (some #(when (= (:witan/name %) id) %) catalog))
+(s/defn validate-workspace
+  [{:keys [workflow contracts catalog] :as workspace} :- as/Workspace]
+  (let [workflow* (set workflow)
+        nodes (workflow->long-hand-workflow workflow)
+        outputs-from-parents-fn (fn [from] (mapcat (fn [x]
+                                                     (let [parent-ce          (get-catalog-entry catalog x)
+                                                           parent-contract    (get-contract workspace x)
+                                                           parent-con-outputs (set (map :witan/key
+                                                                                        (:witan/outputs parent-contract)))
+                                                           output-mappings    (map (juxt :witan/output-src-key
+                                                                                         :witan/output-dest-key)
+                                                                                   (:witan/outputs parent-ce))]
+                                                       (reduce (fn [a [from to]]
+                                                                 (-> a
+                                                                     (disj from)
+                                                                     (conj to))) parent-con-outputs
+                                                               output-mappings)))
+                                                   from))]
 
-(defn- get-contract
-  [{:keys [catalog contracts]} id]
-  (let [catalog-entry          (get-catalog-entry catalog id)
-        fnc                    (:witan/fn catalog-entry)
-        version                (:witan/version catalog-entry)]
-    (some #(when (and (= (:witan/fn %) fnc) (= (:witan/version %) version)) %) contracts)))
+    ;;
+    ;; Does the contract have duplicates in input or output keys?
+    ;;
+    (let [duplicate-contract-inputs
+          (->> contracts
+               (remove (fn [{:keys [witan/inputs]}]
+                         (let [input-set (set (map :witan/key inputs))]
+                           (= (count input-set) (count inputs)))))
+               (vec))]
+      (when (not-empty duplicate-contract-inputs)
+        (throw
+         (IllegalArgumentException.
+          (str "One or more contracts have duplicated inputs: " duplicate-contract-inputs)))))
+    (let [duplicate-contract-outputs
+          (->> contracts
+               (remove (fn [{:keys [witan/outputs]}]
+                         (let [output-set (set (map :witan/key outputs))]
+                           (= (count output-set) (count outputs)))))
+               (vec))]
+      (when (not-empty duplicate-contract-outputs)
+        (throw
+         (IllegalArgumentException.
+          (str "One or more contracts have duplicated outputs: " duplicate-contract-outputs)))))
+
+    ;;
+    ;; Does the catalog have duplicates?
+    ;;
+    (let [duplicate-catalog-entries
+          (->> catalog
+               (map :witan/name)
+               (utils/find-dupes)
+               (vec))]
+      (when (not-empty duplicate-catalog-entries)
+        (throw
+         (IllegalArgumentException.
+          (str "One or more catalog entries are duplicated: " duplicate-catalog-entries)))))
+
+    ;;
+    ;; Are all workflow nodes represented in the catalog?
+    ;;
+    (let [catalog-names
+          (->> catalog
+               (map :witan/name)
+               (set))
+          diff (not-empty (clojure.set/difference workflow* catalog-names))]
+      (when diff
+        (throw
+         (IllegalArgumentException.
+          (str "One or more workflow entries are unrepresented in the catalog: " diff)))))
+
+    ;;
+    ;; Do all functions in the catalog have a contract for the specified version?
+    ;;
+    (let [missing-contracts
+          (->> workflow*
+               (keep (fn [node] (some #(when (= (:witan/name %) node) ((juxt :witan/fn :witan/version) %)) catalog)))
+               (keep (fn [[fn-name fn-version]]
+                       (some #(when-not (or (= (:witan/fn %) fn-name)
+                                            (= (:witan/version %) fn-version)) [fn-name fn-version]) contracts)))
+               (vec))]
+      (when (not-empty missing-contracts)
+        (throw
+         (IllegalArgumentException.
+          (str "There are no contracts for the following function + version combinations: " missing-contracts)))))
+
+    ;;
+    ;; Does each catalog-entry list all inputs from the contract?
+    ;;
+    (let [missing-inputs
+          (->> nodes
+               (keep (fn [[k node]]
+                       (let [ce       (get-catalog-entry catalog k)
+                             contract (get-contract workspace k)
+                             from-ce (map (fn [{:keys [witan/input-src-key
+                                                       witan/input-dest-key
+                                                       witan/input-src-fn]}]
+                                            (if input-src-fn
+                                              input-dest-key
+                                              input-src-key)) (:witan/inputs ce))
+                             from-contract (map :witan/key (:witan/inputs contract))]
+                         (when-not (= (set from-contract) (set from-ce))
+                           (hash-map k {:has from-ce :expects from-contract})))))
+               (vec))]
+      (when (not-empty missing-inputs)
+        (throw
+         (IllegalArgumentException.
+          (str "The following nodes are either missing a reference to an input or provide an unexpected input: " missing-inputs)))))
+
+    ;;
+    ;; Will each node have its inputs provided by a parent?
+    ;;
+    (let [missing-inputs-from-parents
+          (->> nodes
+               (keep (fn [[k node]]
+                       (let [ce       (get-catalog-entry catalog k)
+                             contract (get-contract workspace k)
+                             inputs   (map :witan/key (:witan/inputs contract))
+                             outputs-from-parents (when (:from node) (outputs-from-parents-fn (:from node)))
+                             inputs-from-ext (keep (fn [{:keys [witan/input-src-key
+                                                                witan/input-dest-key
+                                                                witan/input-src-fn]}]
+                                                     (when input-src-fn
+                                                       input-dest-key)) (:witan/inputs ce))
+                             diff (clojure.set/difference (set inputs) (set (concat inputs-from-ext outputs-from-parents)))]
+                         (when (not-empty diff)
+                           (hash-map k diff)))))
+               (vec))]
+      (when (not-empty missing-inputs-from-parents)
+        (throw
+         (IllegalArgumentException.
+          (str "The following nodes will not receive the required inputs from their parent nodes: " missing-inputs-from-parents)))))
+
+    ;;
+    ;; When two or more workflow nodes converge to provide outputs, will there be a clash of keys? (consider output mappings)
+    ;;
+    (let [clashing-outputs
+          (->> nodes
+               (filter (fn [[k node]]
+                         (> (count (:from node)) 1)))
+               (keep   (fn [[k {:keys [from]}]]
+                         (let [parent-outputs (outputs-from-parents-fn from)]
+                           (when-not (= (count (set parent-outputs)) (count parent-outputs))
+                             (hash-map k parent-outputs)))))
+               (vec))]
+      (when (not-empty clashing-outputs)
+        (throw
+         (IllegalArgumentException.
+          (str "The following nodes will experience a clash of inputs from their parents (consider using output mappings): " clashing-outputs)))))))
+
+(def leaf?
+  #(not (contains? % :to)))
+
+(def root?
+  #(not (contains? % :from)))
 
 (defn- validate-params
   [contract catalog-entry]
@@ -72,15 +203,15 @@
       params)))
 
 (defn- upsert-data
-  [{:keys [witan/inputs]} state {:keys [witan/input-src-fn witan/input-src-key witan/input-dest-key]
-                                 :or   {witan/input-dest-key input-src-key}
-                                 :as   input}]
+  [node-key {:keys [witan/inputs]} state {:keys [witan/input-src-fn witan/input-src-key witan/input-dest-key]
+                                          :or   {witan/input-dest-key input-src-key}
+                                          :as   input}]
   (if-not input-src-fn
     (let [existing-data (get state input-src-key)
           existing-schema (when existing-data (some #(when (= (:witan/key %) input-dest-key) (:witan/schema %)) inputs))]
       (if (and existing-schema (not (s/check existing-schema existing-data)))
         (assoc state input-dest-key existing-data)
-        (throw (Exception. (str "Input could not be found or validated: " input)))))
+        (throw (Exception. (format "Input could not be found or validated for %s - %s" node-key input)))))
     (let [fnc (resolve input-src-fn)]
       (if fnc
         (assoc state input-dest-key (fnc input-src-key))
@@ -88,7 +219,7 @@
 
 (defn- collect-dependencies
   [node-key inputs contract catalog-entry]
-  (let [dependencies (reduce (partial upsert-data contract) inputs (:witan/inputs catalog-entry))
+  (let [dependencies (reduce (partial upsert-data node-key contract) inputs (:witan/inputs catalog-entry))
         dependency-errors (->> (:witan/inputs contract)
                                (reduce (fn [a {:keys [witan/schema witan/key]}]
                                          (let [error (s/check schema (get dependencies key))]
@@ -126,19 +257,29 @@
       (throw (Exception. (str "One or more outputs failed to validate: " result-errors)))
       result)))
 
+(defn- map-outputs
+  [result {:keys [witan/outputs]}]
+  (if-let [outputs (not-empty outputs)]
+    (reduce (fn [m {:keys [witan/output-src-key witan/output-dest-key]}]
+              (-> m
+                  (assoc output-dest-key (get m output-src-key))
+                  (dissoc output-src-key))) result outputs)
+    result))
+
 (defn- create-future
   [{:keys [catalog contracts] :as workspace} node-key {:keys [inputs outputs]}]
   (let [contract (get-contract workspace node-key)
         catalog-entry (get-catalog-entry catalog node-key)]
-    ;; TODO - add checks to see if inputs and outputs are VALID.
     (-> (apply d/zip (vals inputs))
         (d/chain
          #(d/future
             (let [internal     (->> (disj (set %) :_start) (reduce conj {}))
                   params       (validate-params contract catalog-entry)
-                  dependencies (collect-dependencies node-key internal contract catalog-entry)
-                  result       (process-node dependencies params contract)
-                  result       (check-outputs result contract)]
+                  result       (-> node-key
+                                   (collect-dependencies internal contract catalog-entry)
+                                   (process-node params contract)
+                                   (check-outputs contract)
+                                   (map-outputs catalog-entry))]
               (if (not-empty outputs)
                 (doseq [output (vals outputs)]
                   (d/success! output result))
