@@ -1,4 +1,4 @@
-(defproject witan.workspace-executor "0.1.0-SNAPSHOT"
+(defproject witan.workspace-executor "0.1.0"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
@@ -8,4 +8,6 @@
                  [manifold "0.1.4"]
                  [rhizome "0.2.5"]
                  [com.taoensso/timbre "4.3.1"]
-                 [prismatic/schema "1.1.0"]])
+                 [prismatic/schema "1.1.0"]]
+  :repositories [["releases" {:url "https://clojars.org/repo"
+                              :creds :gpg}]])
