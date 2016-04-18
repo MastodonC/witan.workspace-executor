@@ -27,15 +27,20 @@
    (s/optional-key :witan/params-schema) (s/maybe s/Any)})
 
 (def Input
-  {:witan/input-src-key s/Keyword
+  {:witan/input-src-key s/Any ;; in this context, 'key' could be a string (such as s3 key)
    (s/optional-key :witan/input-src-fn) s/Symbol
    (s/optional-key :witan/input-dest-key) s/Keyword})
+
+(def Output
+  {:witan/output-src-key s/Keyword
+   :witan/output-dest-key s/Keyword})
 
 (def CatalogEntry
   {:witan/name s/Keyword
    :witan/fn   s/Keyword
    :witan/version s/Str ;; TODO check semver
    :witan/inputs [Input]
+   (s/optional-key :witan/outputs) [Output]
    (s/optional-key :witan/params) s/Any})
 
 (def Workspace
