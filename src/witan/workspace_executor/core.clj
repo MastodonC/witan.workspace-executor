@@ -151,21 +151,21 @@
     ;; Will each node have its inputs provided by a parent?
     ;;
     (let [missing-inputs-from-parents
-          (->> nodes
-               (keep (fn [[k node]]
-                       (let [ce       (get-catalog-entry catalog k)
-                             contract (get-contract workspace k)
-                             inputs   (map :witan/key (:witan/inputs contract))
-                             outputs-from-parents (when (:from node) (outputs-from-parents-fn (:from node)))
-                             inputs-from-ext (keep (fn [{:keys [witan/input-src-key
-                                                                witan/input-dest-key
-                                                                witan/input-src-fn]}]
-                                                     (when input-src-fn
-                                                       input-dest-key)) (:witan/inputs ce))
-                             diff (clojure.set/difference (set inputs) (set (concat inputs-from-ext outputs-from-parents)))]
-                         (when (not-empty diff)
-                           (hash-map k diff)))))
-               (vec))]
+          (into []
+                (keep (fn [[k node]]
+                        (let [ce       (get-catalog-entry catalog k)
+                              contract (get-contract workspace k)
+                              inputs   (map :witan/key (:witan/inputs contract))
+                              outputs-from-parents (when (:from node) (outputs-from-parents-fn (:from node)))
+                              inputs-from-ext (keep (fn [{:keys [witan/input-src-key
+                                                                 witan/input-dest-key
+                                                                 witan/input-src-fn]}]
+                                                      (when input-src-fn
+                                                        input-dest-key)) (:witan/inputs ce))
+                              diff (clojure.set/difference (set inputs) (set (concat inputs-from-ext outputs-from-parents)))]
+                          (when (not-empty diff)
+                            (hash-map k diff)))))
+                nodes)]
       (when (not-empty missing-inputs-from-parents)
         (throw
          (IllegalArgumentException.
