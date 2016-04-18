@@ -62,21 +62,21 @@
     ;; Does the contract have duplicates in input or output keys?
     ;;
     (let [duplicate-contract-inputs
-          (->> contracts
-               (remove (fn [{:keys [witan/inputs]}]
-                         (let [input-set (set (map :witan/key inputs))]
-                           (= (count input-set) (count inputs)))))
-               (vec))]
+          (into []
+                (remove (fn [{:keys [witan/inputs]}]
+                          (let [input-set (set (map :witan/key inputs))]
+                            (= (count input-set) (count inputs)))))
+                contracts)]
       (when (not-empty duplicate-contract-inputs)
         (throw
          (IllegalArgumentException.
           (str "One or more contracts have duplicated inputs: " duplicate-contract-inputs)))))
     (let [duplicate-contract-outputs
-          (->> contracts
-               (remove (fn [{:keys [witan/outputs]}]
-                         (let [output-set (set (map :witan/key outputs))]
-                           (= (count output-set) (count outputs)))))
-               (vec))]
+          (into []
+                (remove (fn [{:keys [witan/outputs]}]
+                          (let [output-set (set (map :witan/key outputs))]
+                            (= (count output-set) (count outputs)))))
+                contracts)]
       (when (not-empty duplicate-contract-outputs)
         (throw
          (IllegalArgumentException.
@@ -86,10 +86,10 @@
     ;; Does the catalog have duplicates?
     ;;
     (let [duplicate-catalog-entries
-          (->> catalog
-               (map :witan/name)
-               (utils/find-dupes)
-               (vec))]
+          (utils/find-dupes
+           (into []
+                 (map :witan/name)
+                 catalog))]
       (when (not-empty duplicate-catalog-entries)
         (throw
          (IllegalArgumentException.
@@ -99,9 +99,9 @@
     ;; Are all workflow nodes represented in the catalog?
     ;;
     (let [catalog-names
-          (->> catalog
-               (map :witan/name)
-               (set))
+          (into []
+                (map :witan/name)
+                catalog)
           diff (not-empty (clojure.set/difference workflow* catalog-names))]
       (when diff
         (throw
@@ -112,12 +112,13 @@
     ;; Do all functions in the catalog have a contract for the specified version?
     ;;
     (let [missing-contracts
-          (->> workflow*
-               (keep (fn [node] (some #(when (= (:witan/name %) node) ((juxt :witan/fn :witan/version) %)) catalog)))
-               (keep (fn [[fn-name fn-version]]
-                       (some #(when-not (or (= (:witan/fn %) fn-name)
-                                            (= (:witan/version %) fn-version)) [fn-name fn-version]) contracts)))
-               (vec))]
+          (into []
+                (comp
+                 (keep (fn [node] (some #(when (= (:witan/name %) node) ((juxt :witan/fn :witan/version) %)) catalog)))
+                 (keep (fn [[fn-name fn-version]]
+                         (some #(when-not (or (= (:witan/fn %) fn-name)
+                                              (= (:witan/version %) fn-version)) [fn-name fn-version]) contracts))))
+                workflow*)]
       (when (not-empty missing-contracts)
         (throw
          (IllegalArgumentException.
@@ -127,20 +128,20 @@
     ;; Does each catalog-entry list all inputs from the contract?
     ;;
     (let [missing-inputs
-          (->> nodes
-               (keep (fn [[k node]]
-                       (let [ce       (get-catalog-entry catalog k)
-                             contract (get-contract workspace k)
-                             from-ce (map (fn [{:keys [witan/input-src-key
-                                                       witan/input-dest-key
-                                                       witan/input-src-fn]}]
-                                            (if input-src-fn
-                                              input-dest-key
-                                              input-src-key)) (:witan/inputs ce))
-                             from-contract (map :witan/key (:witan/inputs contract))]
-                         (when-not (= (set from-contract) (set from-ce))
-                           (hash-map k {:has from-ce :expects from-contract})))))
-               (vec))]
+          (into []
+                (keep (fn [[k node]]
+                        (let [ce       (get-catalog-entry catalog k)
+                              contract (get-contract workspace k)
+                              from-ce (map (fn [{:keys [witan/input-src-key
+                                                        witan/input-dest-key
+                                                        witan/input-src-fn]}]
+                                             (if input-src-fn
+                                               input-dest-key
+                                               input-src-key)) (:witan/inputs ce))
+                              from-contract (map :witan/key (:witan/inputs contract))]
+                          (when-not (= (set from-contract) (set from-ce))
+                            (hash-map k {:has from-ce :expects from-contract})))))
+                nodes)]
       (when (not-empty missing-inputs)
         (throw
          (IllegalArgumentException.
@@ -174,14 +175,15 @@
     ;; When two or more workflow nodes converge to provide outputs, will there be a clash of keys? (consider output mappings)
     ;;
     (let [clashing-outputs
-          (->> nodes
-               (filter (fn [[k node]]
-                         (> (count (:from node)) 1)))
-               (keep   (fn [[k {:keys [from]}]]
-                         (let [parent-outputs (outputs-from-parents-fn from)]
-                           (when-not (= (count (set parent-outputs)) (count parent-outputs))
-                             (hash-map k parent-outputs)))))
-               (vec))]
+          (into []
+                (comp
+                 (filter (fn [[k node]]
+                           (> (count (:from node)) 1)))
+                 (keep   (fn [[k {:keys [from]}]]
+                           (let [parent-outputs (outputs-from-parents-fn from)]
+                             (when-not (= (count (set parent-outputs)) (count parent-outputs))
+                               (hash-map k parent-outputs))))))
+                nodes)]
       (when (not-empty clashing-outputs)
         (throw
          (IllegalArgumentException.
