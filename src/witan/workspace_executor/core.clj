@@ -10,16 +10,16 @@
             [witan.workspace-executor.schema :as as]
             [witan.workspace-executor.utils :as utils]))
 
+(defn- get-catalog-entry
+  [catalog id]
+  (some #(when (= (:witan/name %) id) %) catalog))
+
 (defn- get-contract
   [{:keys [catalog contracts]} id]
   (let [catalog-entry          (get-catalog-entry catalog id)
         fnc                    (:witan/fn catalog-entry)
         version                (:witan/version catalog-entry)]
     (some #(when (and (= (:witan/fn %) fnc) (= (:witan/version %) version)) %) contracts)))
-
-(defn- get-catalog-entry
-  [catalog id]
-  (some #(when (= (:witan/name %) id) %) catalog))
 
 (s/defn workflow->long-hand-workflow
   [wf :- as/Workflow]
