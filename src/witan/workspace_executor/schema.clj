@@ -5,8 +5,21 @@
   [x]
   ((comp even? count) x))
 
+(def WorkflowBranch
+  [(s/one s/Keyword "pred")
+   (s/one s/Keyword "exit")
+   (s/one s/Keyword "loop")])
+
+(def WorkflowNode
+  [(s/one s/Keyword "from")
+   (s/one
+    (s/conditional 
+     keyword? s/Keyword
+     :else WorkflowBranch)
+    "to")])
+
 (def Workflow
-  (s/both [s/Keyword] (s/pred even-count?)))
+  [WorkflowNode])
 
 (def ContractOutput
   {:witan/schema       s/Any

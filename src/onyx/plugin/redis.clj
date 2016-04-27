@@ -6,7 +6,8 @@
              [default-vals :refer [arg-or-default]]
              [uuid :refer [random-uuid]]]
             [onyx.types :as t]
-            [taoensso.carmine :as car :refer [wcar]]))
+            [taoensso.carmine :as car :refer [wcar]]
+            [onyx.tasks.redis :as redis]))
 
 (defn redis-get
   [conn k]
@@ -36,6 +37,22 @@
 
 (def reader-conn-spec
   {:lifecycle/before-task-start inject-conn-spec})
+
+
+(defn close-redis-loop
+  [event {:keys [redis/key redis/uri redis/read-timeout-ms]}]
+  (let [sentinel "done"
+        conn {:spec {:uri uri
+                     :read-timeout-ms (or read-timeout-ms
+                                          4000)}}]
+    (when (and
+           (= (wcar conn (car/exists key)) 1)
+           (not= (wcar conn (car/get key)) sentinel))
+      (wcar conn (car/set key sentinel))))
+  {})
+
+(def remove-redis-key
+  {:lifecycle/after-batch close-redis-loop})
 
 ;;;;;;;;;;;;;;;;;;;;;
 ;; Output plugin code

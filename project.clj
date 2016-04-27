@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [org.clojure/core.async "0.2.374"]
                  [org.onyxplatform/onyx "0.9.4"]
+                 [com.rpl/specter "0.9.3"]
                  [com.taoensso/timbre "4.3.1"]
                  [com.taoensso/carmine "2.12.2" :exclusions [com.taoensso/timbre com.taoensso/encore]]
                  [aero "0.2.0"]
