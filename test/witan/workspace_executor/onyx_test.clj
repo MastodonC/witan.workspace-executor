@@ -74,6 +74,7 @@
                :onyx/type :output,
                :onyx/medium :redis,
                :redis/uri (redis-uri config)
+               :redis/cmd :redis/set
                :onyx/batch-size (batch-size config)}
               {:onyx/name :read-state-inc,
                :onyx/plugin :onyx.plugin.redis/reader,
@@ -81,6 +82,7 @@
                :onyx/medium :redis,
                :onyx/max-peers 1
                :redis/uri (redis-uri config)
+               :redis/cmd :redis/get
                :onyx/batch-size (batch-size config)}]
              (mapv #(dissoc % :redis/key) (:catalog onyx-job))))
       (let [redis-key-entries (concat
@@ -89,7 +91,30 @@
         (is (every?
              #(.startsWith (name %) "state-inc-")
              redis-key-entries))
-        (is (all-same redis-key-entries))))))
+        (is (all-same redis-key-entries)))))
+  
+  (testing "merge definitions result in a gathering step"
+    (let [onyx-job (o/witan-workflow->onyx-workflow
+                    {:workflow [[:in :inc]
+                                [:in :mult]
+                                [:inc :sum]
+                                [:mult :sum]
+                                [:sum :out]]
+                     :catalog []
+                     :task-scheduler :onyx.task-scheduler/balanced}
+                    config)]
+      (is (= [[:in :inc]
+              [:in :mult]
+              [:inc :write-merge-inc-mult-for-sum]
+              [:mult :write-merge-inc-mult-for-sum]
+              [:sum :out]
+              [:read-merge-inc-mult-for-sum :sum]]
+             (:workflow onyx-job)))
+      (is (= [{:lifecycle/task :read-merge-inc-mult-for-sum
+               :lifecycle/calls :onyx.plugin.redis/remove-redis-key
+               :redis/uri (redis-uri config)}]
+             (mapv #(dissoc % :redis/key) 
+                   (:lifecycles onyx-job)))))))
 
 (deftest witan-catalog->onyx-catalog
   (testing "Simple function gets relabeled"

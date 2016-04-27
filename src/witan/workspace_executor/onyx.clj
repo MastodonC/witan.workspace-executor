@@ -16,6 +16,18 @@
             [onyx.job :as onyx.job]
             [onyx.test-helper :refer [with-test-env]]))
 
+(defn gather-by
+  "non lazy partition-by, ensures that all matches in given sequences appear together, no matter on position"
+  [f coll]
+  (vals
+   (reduce
+    (fn [acc e]
+      (let [k (f e)]
+        (if (k acc)
+          (update acc k conj e)
+          (assoc acc k [e]))))
+    {}
+    coll)))
 
 (defn branch?
   [v]
@@ -28,6 +40,7 @@
 (def llast (comp last last))
 (def ssecond (comp second second))
 (def flast (comp first last))
+(def lfirst (comp last first))
 
 (defn equals
   [v]
@@ -105,18 +118,16 @@
                (transform
                 (wf-to-task (llast branch))
                 (constantly write-state))
-               (transform
+               (setval
                 wf-end
-                (constantly
-                 (vector [read-state (llast branch)])))
+                [[read-state (llast branch)]])
                (transform
                 (wf-node branch)
                 (constantly
                  loop-node))
-               (transform
+               (setval
                 wf-end
-                (constantly
-                 (vector exit-node)))
+                [exit-node])
                (setval
                 fc-end
                 (flow-condition
@@ -127,13 +138,48 @@
                 (flow-condition
                  exit-node
                  [branch-fn]))
-               (add-task (redis-tasks/writer write-state redis-uri redis-key batch-settings))
+               (add-task (redis-tasks/writer write-state redis-uri :redis/set redis-key batch-settings))
                (add-task (redis-tasks/reader read-state redis-uri redis-key batch-settings))
                (setval
                 lc-end
                 (life-cycle (last exit-node)
                             redis-key
                             redis-uri))))))))
+
+(defn merge-expanders
+  [config]
+  (let [redis-uri (:redis/uri (:redis-config config))
+        batch-settings (:batch-settings config)]
+    (fn [merging-nodes]
+      (let [target (lfirst merging-nodes)
+            write-merge-task (keyword (str "write-merge-"
+                                           (clojure.string/join "-" (map (comp name first) merging-nodes))
+                                           "-for-"
+                                           (name target)))
+            read-merge-task (keyword (str "read-merge-"
+                                          (clojure.string/join "-" (map (comp name first) merging-nodes))
+                                          "-for-"
+                                          (name target)))
+            redis-key (redis-key-for [write-merge-task])]
+        (fn [raw]
+          (->> 
+           (reduce #(transform
+                     (wf-node %2)
+                     (fn [n]
+                       [(first n) write-merge-task])
+                     %1)
+                   raw merging-nodes)
+           (setval
+            wf-end
+            [[read-merge-task target]])
+           (setval
+            lc-end
+            (life-cycle read-merge-task
+                        redis-key
+                        redis-uri))
+           (add-task (redis-tasks/writer write-merge-task redis-uri :redis/lpush redis-key batch-settings))
+           (add-task (redis-tasks/read-list read-merge-task redis-uri redis-key (count merging-nodes) batch-settings))
+           ))))))
 
 (defn schema-wrapper
   [input-schema output-schema fn-wrapped segment]
@@ -145,15 +191,33 @@
 (def onyx-defaults
   {:task-scheduler :onyx.task-scheduler/balanced})
 
-(defn witan-workflow->onyx-workflow
-  [{:keys [workflow] :as workspace} config]
+(defn branch-expander
+  [config workspace]
   ((->>
-    (select [:workflow ALL branch?] workspace)
-    (map (branch-expanders config))
-    (apply comp identity)) 
+     (select [:workflow ALL branch?] workspace)
+     (map (branch-expanders config))
+     (apply comp identity))
+   workspace))
+
+(defn merge-expander
+  [config workspace]
+  ((->>
+    (:workflow workspace)
+    (remove branch?)
+    (gather-by second)
+    (filter #(< 1 (count %)))
+    (map (merge-expanders config))
+    (apply comp identity))
+   workspace))
+
+(defn witan-workflow->onyx-workflow
+  [{:keys [workflow] :as workspace} config]  
+  (->>
    (assoc workspace
           :flow-conditions []
-          :lifecycles [])))
+          :lifecycles [])
+   (merge-expander config)
+   (branch-expander config)))
 
 (def onyx-catalog-entry-template
   {:onyx/name :witan/name

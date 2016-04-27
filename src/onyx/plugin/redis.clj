@@ -17,9 +17,23 @@
   [conn k v]
   (wcar conn (car/set k v)))
 
+(defn redis-rpush!
+  [conn k v]
+  (wcar conn (car/rpush k v)))
+
+(defn redis-lrange!
+  [conn k c]
+  (wcar conn (car/lrange k 0 c)))
+
 (defn redis-del!
   [conn k]
   (wcar conn (car/del k)))
+
+(def cmds
+  {:redis/rpush redis-rpush!
+   :redis/set redis-set!
+   :redis/get redis-get
+   :redis/lrange redis-lrange!})
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; Connection lifecycle code
@@ -57,7 +71,7 @@
 ;;;;;;;;;;;;;;;;;;;;;
 ;; Output plugin code
 
-(defrecord RedisWriter [conn k]
+(defrecord RedisWriter [conn cmd k]
   p-ext/Pipeline
   (read-batch [_ event]
     (onyx.peer.function/read-batch event))
@@ -65,21 +79,23 @@
   (write-batch [_ {:keys [onyx.core/results] :as everything}]
     (when-let [segment (first (mapcat :leaves (:tree results)))]
       (let [package (select-keys segment [:id :message])]
-        (redis-set! conn k package)))
+        (cmd conn k package)))
     {})
   (seal-resource [_ _]
     {}))
 
-(defn writer [pipeline-data]
+(defn writer
+  [pipeline-data]
   (let [catalog-entry (:onyx.core/task-map pipeline-data)
         uri (:redis/uri catalog-entry)
         k (:redis/key catalog-entry)
+        cmd ((:redis/cmd catalog-entry) cmds)
         _ (when-not uri
             (throw (ex-info ":redis/uri must be supplied to output task." catalog-entry)))
         conn          {:spec {:uri uri
                               :read-timeout-ms (or (:redis/read-timeout-ms catalog-entry)
                                                    4000)}}]
-    (->RedisWriter conn k)))
+    (->RedisWriter conn cmd k)))
 
 ;;;;;;;;;;;;;;;;;;;;;
 ;; Input plugin code
@@ -93,7 +109,7 @@
      :redis/drained?         (:drained? pipeline)
      :redis/pending-messages (:pending-messages pipeline)}))
 
-(defrecord RedisReader [conn k unacked-messages drained? current-state]
+(defrecord RedisReader [conn k cmd length unacked-messages drained? current-state]
   p-ext/Pipeline
   p-ext/PipelineInput
   (write-batch [this event]
@@ -103,7 +119,7 @@
     (when-not @drained?
       (let [{:keys [message id]
              :or {id (random-uuid)}
-             :as raw-state} (redis-get conn k)]
+             :as raw-state} (cmd conn k)]
         (when-not (= raw-state @current-state)
           (reset! current-state raw-state)
           (let [done? (= "done" raw-state)
@@ -139,6 +155,25 @@
     {}))
 
 (defn reader [pipeline-data]
+  (let [catalog-entry (:onyx.core/task-map pipeline-data)
+        drained?      (atom false)
+        read-timeout  (or (:redis/read-timeout-ms catalog-entry) 4000)
+        k (:redis/key catalog-entry)
+        uri (:redis/uri catalog-entry)
+        unacked-messages (atom {})
+        cmd ((:redis/cmd catalog-entry) cmds)
+        length (:redis/length catalog-entry)
+        _ (when-not uri
+            (throw (ex-info ":redis/uri must be supplied to output task." catalog-entry)))
+        conn             {:pool nil
+                          :spec {:uri uri
+                                 :read-timeout-ms read-timeout}}]
+    (->RedisReader conn k
+                   cmd length
+                   unacked-messages
+                   drained? (atom nil))))
+
+(defn reader-append [pipeline-data]
   (let [catalog-entry (:onyx.core/task-map pipeline-data)
         drained?      (atom false)
         read-timeout  (or (:redis/read-timeout-ms catalog-entry) 4000)
