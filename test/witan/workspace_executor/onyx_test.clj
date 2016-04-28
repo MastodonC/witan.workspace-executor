@@ -64,11 +64,6 @@
                :flow/to [:out], :flow/predicate 
                [:enough?]}]
              (:flow-conditions onyx-job)))
-      (is (= [{:lifecycle/task :out
-               :lifecycle/calls :onyx.plugin.redis/remove-redis-key
-               :redis/uri (redis-uri config)}]
-             (mapv #(dissoc % :redis/key) 
-                   (:lifecycles onyx-job))))
       (is (= [{:onyx/name :write-state-inc,
                :onyx/plugin :onyx.plugin.redis/writer,
                :onyx/type :output,
@@ -85,9 +80,7 @@
                :redis/cmd :redis/get
                :onyx/batch-size (batch-size config)}]
              (mapv #(dissoc % :redis/key) (:catalog onyx-job))))
-      (let [redis-key-entries (concat
-                               (map :redis/key (:catalog onyx-job))
-                               (map :redis/key (:lifecycles onyx-job)))]
+      (let [redis-key-entries (map :redis/key (:catalog onyx-job))]
         (is (every?
              #(.startsWith (name %) "state-inc-")
              redis-key-entries))
@@ -109,12 +102,7 @@
               [:mult :write-merge-inc-mult-for-sum]
               [:sum :out]
               [:read-merge-inc-mult-for-sum :sum]]
-             (:workflow onyx-job)))
-      (is (= [{:lifecycle/task :read-merge-inc-mult-for-sum
-               :lifecycle/calls :onyx.plugin.redis/remove-redis-key
-               :redis/uri (redis-uri config)}]
-             (mapv #(dissoc % :redis/key) 
-                   (:lifecycles onyx-job)))))))
+             (:workflow onyx-job))))))
 
 (deftest witan-catalog->onyx-catalog
   (testing "Simple function gets relabeled"

@@ -1,4 +1,5 @@
-(ns witan.workspace-executor.function-catalog)
+(ns witan.workspace-executor.function-catalog
+  (:require [schema.core :as s]))
 
 (defn gte-ten
   [_ _ {:keys [number] :as msg} _]
@@ -9,6 +10,20 @@
   (update msg
           :number
           inc))
+
+(defn mult
+  [{:keys [number] :as msg}]
+  (->
+   msg
+   (assoc :mult 2)
+   (dissoc :number)))
+
+(defn sum
+  [{:keys [number mult] :as msg}]
+  (->
+   msg
+   (assoc :number (* number mult))
+   (dissoc :mult)))
 
 (defn mul2
   [{:keys [number]}]

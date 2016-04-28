@@ -16,19 +16,6 @@
             [onyx.job :as onyx.job]
             [onyx.test-helper :refer [with-test-env]]))
 
-(defn gather-by
-  "non lazy partition-by, ensures that all matches in given sequences appear together, no matter on position"
-  [f coll]
-  (vals
-   (reduce
-    (fn [acc e]
-      (let [k (f e)]
-        (if (k acc)
-          (update acc k conj e)
-          (assoc acc k [e]))))
-    {}
-    coll)))
-
 (defn branch?
   [v]
   (vector? (second v)))
@@ -94,13 +81,6 @@
     :flow/to [(second node)]
     :flow/predicate pred}])
 
-(defn life-cycle
-  [task redis-key redis-uri]
-  [{:lifecycle/task task
-    :lifecycle/calls :onyx.plugin.redis/remove-redis-key
-    :redis/key redis-key
-    :redis/uri redis-uri}])
-
 (defn branch-expanders
   [config]
   (let [redis-uri (:redis/uri (:redis-config config))
@@ -139,12 +119,7 @@
                  exit-node
                  [branch-fn]))
                (add-task (redis-tasks/writer write-state redis-uri :redis/set redis-key batch-settings))
-               (add-task (redis-tasks/reader read-state redis-uri redis-key batch-settings))
-               (setval
-                lc-end
-                (life-cycle (last exit-node)
-                            redis-key
-                            redis-uri))))))))
+               (add-task (redis-tasks/reader read-state redis-uri redis-key batch-settings))))))))
 
 (defn merge-expanders
   [config]
@@ -172,14 +147,8 @@
            (setval
             wf-end
             [[read-merge-task target]])
-           (setval
-            lc-end
-            (life-cycle read-merge-task
-                        redis-key
-                        redis-uri))
-           (add-task (redis-tasks/writer write-merge-task redis-uri :redis/lpush redis-key batch-settings))
-           (add-task (redis-tasks/read-list read-merge-task redis-uri redis-key (count merging-nodes) batch-settings))
-           ))))))
+           (add-task (redis-tasks/writer write-merge-task redis-uri :redis/rpush redis-key batch-settings))
+           (add-task (redis-tasks/read-list read-merge-task redis-uri redis-key (count merging-nodes) batch-settings))))))))
 
 (defn schema-wrapper
   [input-schema output-schema fn-wrapped segment]
@@ -204,7 +173,8 @@
   ((->>
     (:workflow workspace)
     (remove branch?)
-    (gather-by second)
+    (group-by second)
+    vals
     (filter #(< 1 (count %)))
     (map (merge-expanders config))
     (apply comp identity))

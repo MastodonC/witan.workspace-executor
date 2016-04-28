@@ -45,7 +45,7 @@
                 peer-config]} @config
         redis-spec (redis-conn)
         {:keys [out in]} (get-core-async-channels job)]
-    (with-test-env [test-env [6 env-config peer-config]]
+    (with-test-env [test-env [7 env-config peer-config]]
       (pipe (spool [data :done]) in)
       (onyx.test-helper/validate-enough-peers! test-env job)
       (let [job-id (:job-id (onyx.api/submit-job peer-config job))
@@ -78,3 +78,43 @@
                           :witan/fn :witan.workspace-executor.function-catalog/my-inc}]}
               @config))
             state)))))
+
+(deftest merge-workspace-executed-on-onyx
+  (let [state {:test "blah" :number 0}]
+    (is (= (fc/sum (merge (fc/mult state) (fc/my-inc state)))
+           (run-job
+            (add-source-and-sink
+             (o/workspace->onyx-job
+              {:workflow [[:in :inc]
+                          [:in :mult]
+                          [:inc :sum]
+                          [:mult :sum]
+                          [:sum :out]]
+               :catalog [{:witan/name :inc
+                          :witan/fn :witan.workspace-executor.function-catalog/my-inc}
+                         {:witan/name :mult
+                          :witan/fn :witan.workspace-executor.function-catalog/mult}
+                         {:witan/name :sum
+                          :witan/fn :witan.workspace-executor.function-catalog/sum}]
+               :task-scheduler :onyx.task-scheduler/balanced}
+              @config))
+            state)))))
+
+
+(comment [:get-births-data-year :at-risk-this-birth-year
+               :get-births-data-year :at-risk-last-birth-year
+               :at-risk-this-birth-year :births-pool
+               :at-risk-last-birth-year :births-pool
+               ;; :births-pool :births
+               ;; :births :fert-rate-without-45-49
+               ;; :fert-rate-without-45-49 :fert-rate-with-45-49
+               ;; :at-risk-this-fert-last-year :estimated-sya-births-pool
+               ;; :at-risk-last-fert-last-year :estimated-sya-births-pool
+               ;; :fert-rate-with-45-49 :estimated-sya-births
+               ;; :estimated-sya-births-pool :estimated-sya-births
+               ;; :estimated-sya-births :estimated-births
+               ;; :estimated-sya-births :historic-fertility
+               ;; :estimated-births :scaling-factors
+               ;; :actual-births :scaling-factors
+               ;; :scaling-factors :historic-fertility
+])
