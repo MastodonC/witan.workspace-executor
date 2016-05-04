@@ -148,10 +148,10 @@
   (ack-segment
       [_ e message-id]
       (let [m (get @unacked-messages message-id)]
-        (when (= m
-                 (if length 
-                   (cmd conn k length)
-                   (cmd conn k)))
+        (when (= (:id m)
+                 (:id (if length 
+                        (cmd conn k length)
+                        (cmd conn k))))
           (redis-set! conn k sentinel)))
       (swap! unacked-messages dissoc message-id))
 
