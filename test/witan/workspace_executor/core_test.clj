@@ -97,7 +97,7 @@
 
 (deftest happy-path-tests
   (testing "Happy path (linear) test"
-    (let [workflow [:a :b :b :c]
+    (let [workflow [[:a :b] [:b :c]]
           catalog [{:witan/name :a
                     :witan/fn :foo/inc
                     :witan/version "1.0"
@@ -118,12 +118,10 @@
                      :contracts contracts}
           result (s/with-fn-validation (wex/execute workspace))]
       (is result)
-      (is (= (-> result keys first) (last workflow)))
-      (is (contains? (-> result vals first) :number))
-      (is (= (-> result vals first :number) 12))))
+      (is (= result {:number 12}))))
 
   (testing "Happy path (merge w/output mapping) test"
-    (let [workflow [:a :c :b :c]
+    (let [workflow [[:a :c] [:b :c] [:a :d]]
           catalog [{:witan/name :a
                     :witan/fn :foo/inc
                     :witan/version "1.0"
@@ -142,19 +140,23 @@
                     :witan/fn :foo/add
                     :witan/version "1.0"
                     :witan/inputs [{:witan/input-src-key :number}
-                                   {:witan/input-src-key :to-add}]}]
+                                   {:witan/input-src-key :to-add}]}
+                   {:witan/name :d
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"
+                    :witan/inputs [{:witan/input-src-key :number}]
+                    :witan/outputs [{:witan/output-src-key :number
+                                     :witan/output-dest-key :number2}]}]
           workspace {:workflow  workflow
                      :catalog   catalog
                      :contracts contracts}
           result (s/with-fn-validation (wex/execute workspace))]
       (is result)
-      (is (= (-> result keys first) (last workflow)))
-      (is (contains? (-> result vals first) :number))
-      (is (= (-> result vals first :number) 6)))))
+      (is (= result {:number 6 :number2 3})))))
 
 (deftest valid-workspace-tests
   (testing "Workspace is valid"
-    (let [workspace {:workflow [:a :b]
+    (let [workspace {:workflow [[:a :b]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -169,7 +171,7 @@
       (is (nil? (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - duplicate inputs in the contract"
-    (let [workspace {:workflow [:a :b]
+    (let [workspace {:workflow [[:a :b]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -209,7 +211,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - duplicate outputs in the contract"
-    (let [workspace {:workflow [:a :b]
+    (let [workspace {:workflow [[:a :b]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -249,7 +251,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - unrepresented workflow node"
-    (let [workspace {:workflow [:a :b :b :c] ;; <<< There is no :c in the catalog
+    (let [workspace {:workflow [[:a :b] [:b :c]] ;; <<< There is no :c in the catalog
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -267,7 +269,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no catalog combination"
-    (let [workspace {:workflow [:a :b]
+    (let [workspace {:workflow [[:a :b]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "2.0" ;; <<< There is no contract for version 2.0
@@ -285,7 +287,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no input fulfilment - input is missing"
-    (let [workspace {:workflow [:a :c :b :c]
+    (let [workspace {:workflow [[:a :c] [:b :c]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -310,7 +312,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no input fulfilment - has extra input"
-    (let [workspace {:workflow [:a :c :b :c]
+    (let [workspace {:workflow [[:a :c] [:b :c]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -340,7 +342,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no input fulfilment - no upstream, input will not be fulfilled"
-    (let [workspace {:workflow [:a :c :b :c]
+    (let [workspace {:workflow [[:a :c] [:b :c]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -365,7 +367,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no input fulfilment - has upstream but doesn't fulfil"
-    (let [workspace {:workflow [:a :c]
+    (let [workspace {:workflow [[:a :c]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -384,7 +386,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid - no input fulfilment - inputs will clash"
-    (let [workspace {:workflow [:a :c :b :c]
+    (let [workspace {:workflow [[:a :c] [:b :c]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"
@@ -408,7 +410,7 @@
            (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid  - duplicates in the catalog"
-    (let [workspace {:workflow [:a :b]
+    (let [workspace {:workflow [[:a :b]]
                      :catalog [{:witan/name :a
                                 :witan/fn :foo/inc
                                 :witan/version "1.0"

@@ -28,10 +28,9 @@
                            (reduce (fn [a c] (conj a (first c))) [])
                            (not-empty)))
         with-to     (->> wf
-                         (partition 2)
                          (reduce (fn [x [from to]] (assoc x from (conj (get x from []) to))) {})
                          (map (fn [[n t]] (hash-map n {:to t}))))
-        with-leaves (->> (set wf)
+        with-leaves (->> (set (flatten wf))
                          (reduce (fn [a c] (if (contains? a c) a (conj a (hash-map c {})))) (into {} with-to)))
         with-froms  (reduce (fn [a x] (if-let [froms (fnc-froms (first x) with-leaves)]
                                         (conj a (update-in x [1] assoc :from froms))
@@ -40,7 +39,7 @@
 
 (s/defn validate-workspace
   [{:keys [workflow contracts catalog] :as workspace} :- as/Workspace]
-  (let [workflow* (set workflow)
+  (let [workflow* (set (flatten workflow))
         nodes (workflow->long-hand-workflow workflow)
         outputs-from-parents-fn (fn [from] (mapcat (fn [x]
                                                      (let [parent-ce          (get-catalog-entry catalog x)
@@ -324,7 +323,7 @@
         (deref))
     ;; gather results
     (->> with-futures
-         (reduce-kv (fn [m k v] (if (leaf? v) (conj m (hash-map k (-> v :future deref))) m)) {}))))
+         (reduce-kv (fn [m k v] (if (leaf? v) (conj m (-> v :future deref)) m)) {}))))
 
 
 (s/defn workflow->graphviz
