@@ -353,13 +353,25 @@
 (defn create-channel-map
   [{:keys [to from] :as m}]
   (-> m
-      (assoc :inbound  (into {} (map #(hash-map % (async/chan)) from)))
-      (assoc :outbound (into {} (map #(hash-map % (async/chan)) to)))))
+      (assoc :inbound  (into {} (map #(hash-map % (async/chan)) (or from [:_src]))))
+      (assoc :outbound (into {} (map #(hash-map % (async/chan)) (or to [:_dest]))))))
 
 (defn create-routing
   [node-key {:keys [inbound outbound] :as m}]
   (-> m
       (assoc :runnable )))
+
+(defn route
+  [with-channels from to]
+  {:inbound (get-in with-channels [from :outbound to])
+   :outbound (get-in with-channels [to :inbound from])
+   :pipe (async/pipe (get-in with-channels [from :outbound to])
+                     (get-in with-channels [to :inbound from]))
+   })
+
+(defn meld-name
+  [f s]
+  (keyword (str (name f) "-" (name s))))
 
 (s/defn execute
   [{:keys [workflow] :as workspace} :- as/Workspace]
@@ -367,8 +379,21 @@
   (let [nodes (workflow->long-hand-workflow workflow)
         root-nodes    (not-empty (reduce-kv (fn [m k v] (if (root? v) (conj m k) m)) [] nodes))
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
-        routers       (map create-routing with-channels)]
-    with-channels))
+        routers       (reduce-kv (fn [a k v]                                    
+                                   (reduce
+                                    (fn [a to] 
+                                      (assoc a 
+                                             (meld-name k to)
+                                             (route with-channels k to)))
+                                    a
+                                    (:to v)))
+                                 {} with-channels)
+        invokers (reduce-kv 
+                  (fn [a k v]
+                    (assoc a k
+                           (async/pipeline 1 (first (vals (:outbound v))) (map (k (:catalog workspace))) (first (vals (:inbound v))))))
+                  {} with-channels)]
+    [with-channels routers invokers]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
