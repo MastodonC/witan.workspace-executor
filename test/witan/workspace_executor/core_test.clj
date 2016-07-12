@@ -1,5 +1,8 @@
 (ns witan.workspace-executor.core-test
   (:require [clojure.test :refer :all]
+            [com.rpl.specter :as spec 
+             :refer [transform select selected? filterer setval view collect comp-paths keypath
+                     END ALL LAST FIRST VAL BEGINNING STOP]]
             [schema.core :as s]
             [witan.workspace-executor.core :as wex]))
 
@@ -43,11 +46,19 @@
   (println "Finish?" (> number 10))
   (> number 10))
 
+(defn param-spitter
+  [_ params]
+  params)
+
+(defn msg-spitter
+  [msg params]
+  msg)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def contracts
   [{:witan/fn      :foo/inc
-    :witan/impl    'witan.workspace-executor.core-test/inc*
+    :witan/impl    :witan.workspace-executor.core-test/inc*
     :witan/version "1.0"
     :witan/params-schema nil
     :witan/inputs  [{:witan/schema       FooNumber
@@ -57,7 +68,7 @@
                      :witan/key          :number
                      :witan/display-name "Number"}]}
    {:witan/fn      :foo/mul2
-    :witan/impl    'witan.workspace-executor.core-test/mul2
+    :witan/impl    :witan.workspace-executor.core-test/mul2
     :witan/version "1.0"
     :witan/params-schema nil
     :witan/inputs  [{:witan/schema       FooNumber
@@ -67,7 +78,7 @@
                      :witan/key          :number
                      :witan/display-name "Number"}]}
    {:witan/fn      :foo/mulX
-    :witan/impl    'witan.workspace-executor.core-test/mulX
+    :witan/impl    :witan.workspace-executor.core-test/mulX
     :witan/version "1.0"
     :witan/params-schema MulXParams
     :witan/inputs  [{:witan/schema       FooNumber
@@ -77,7 +88,7 @@
                      :witan/key          :number
                      :witan/display-name "Number"}]}
    {:witan/fn      :foo/add
-    :witan/impl    'witan.workspace-executor.core-test/add
+    :witan/impl    :witan.workspace-executor.core-test/add
     :witan/version "1.0"
     :witan/params-schema nil
     :witan/inputs  [{:witan/schema       FooNumber
@@ -91,7 +102,7 @@
                      :witan/display-name "Number"}]}
 
    {:witan/fn      :foo/->str
-    :witan/impl    'witan.workspace-executor.core-test/->str
+    :witan/impl    :witan.workspace-executor.core-test/->str
     :witan/version "1.0"
     :witan/inputs  [{:witan/schema       s/Any
                      :witan/key          :thing
@@ -100,39 +111,52 @@
                      :witan/key          :out-str
                      :witan/display-name "String representation"}]}
    {:witan/fn      :foo/finish?
-    :witan/impl    'witan.workspace-executor.core-test/finish?
+    :witan/impl    :witan.workspace-executor.core-test/finish?
     :witan/version "1.0"
     :witan/predicate? true
     :witan/inputs  [{:witan/schema       s/Any
                      :witan/key          :number
-                     :witan/display-name "True if the number is > 10"}]}])
+                     :witan/display-name "True if the number is > 10"}]}
+   {:witan/fn :foo/putter
+    :witan/impl :witan.workspace-executor.core-test/param-spitter
+    :witan/version "1.0"
+    :witan/params-schema {:number s/Num}
+    :witan/inputs  []
+    :witan/outputs []}
+   {:witan/fn :foo/printer
+    :witan/impl :witan.workspace-executor.core-test/msg-spitter
+    :witan/version "1.0"
+    :witan/inputs  []
+    :witan/outputs []}])
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftest happy-path-tests-1
   (testing "Happy path (linear) test"
-    (let [workflow [[:a :b] [:b :c]]
-          catalog [{:witan/name :a
-                    :witan/fn :foo/inc
+    (let [workflow [[:in :a] [:a :b] [:b :c] [:c :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
                     :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
-                                    :witan/input-src-key  1
-                                    :witan/input-dest-key :number}]}
+                    :witan/params {:number 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
                    {:witan/name :b
                     :witan/fn :foo/mul2
-                    :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-key :number}]}
+                    :witan/version "1.0"}
                    {:witan/name :c
                     :witan/fn :foo/mulX
                     :witan/version "1.0"
-                    :witan/params {:x 3}
-                    :witan/inputs [{:witan/input-src-key :number}]}]
+                    :witan/params {:x 3}}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
           workspace {:workflow  workflow
                      :catalog   catalog
                      :contracts contracts}
           result (s/with-fn-validation (wex/execute workspace))]
       (is result)
-      (is (= result {:number 12})))))
+      (is (= {:number 12} result)))))
 
 (deftest happy-path-tests-2
   (testing "Happy path (merge w/output mapping) test"

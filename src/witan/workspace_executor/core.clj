@@ -4,6 +4,9 @@
             [clojure.core.async :as async]
             [clojure.stacktrace :as st]
             [clojure.walk :as walk]
+            [com.rpl.specter :as spec 
+             :refer [transform select selected? filterer setval view collect comp-paths keypath
+                     END ALL LAST FIRST VAL BEGINNING STOP]]
             [rhizome.viz :as viz]
             [taoensso.timbre :as log]
             [witan.workspace-executor.schema :as as]
@@ -356,11 +359,6 @@
       (assoc :inbound  (into {} (map #(hash-map % (async/chan)) (or from [:_src]))))
       (assoc :outbound (into {} (map #(hash-map % (async/chan)) (or to [:_dest]))))))
 
-(defn create-routing
-  [node-key {:keys [inbound outbound] :as m}]
-  (-> m
-      (assoc :runnable )))
-
 (defn route
   [with-channels from to]
   {:inbound (get-in with-channels [from :outbound to])
@@ -372,6 +370,38 @@
 (defn meld-name
   [f s]
   (keyword (str (name f) "-" (name s))))
+
+(defn kw->fn [kw]
+  (try
+    (let [user-ns (symbol (namespace kw))
+          user-fn (symbol (name kw))]
+      (or (ns-resolve user-ns user-fn)
+          (throw (Exception.))))
+    (catch Throwable e
+      (throw (ex-info (str "Could not resolve symbol on the classpath, did you require the file that contains the symbol " kw "?") {:kw kw})))))
+
+(defn catalog-function
+  [{:keys [catalog contracts]} label]
+  (let [fn-label (select-keys 
+                  (spec/select-one 
+                   [(filterer :witan/name #(= label %)) ALL]
+                   catalog)
+                  [:witan/fn :witan/version :witan/params])
+        func (spec/select-one
+              [(filterer #(= (:witan/fn %)
+                             (:witan/fn fn-label)) 
+                         #(= (:witan/version %)
+                             (:witan/version fn-label))) 
+               ALL
+               :witan/impl]
+              contracts)]
+    #((kw->fn func) % (:witan/params fn-label))))
+
+(defn channel
+  [with-channels c]
+  (spec/select
+   [(spec/walker c) c]
+   with-channels))
 
 (s/defn execute
   [{:keys [workflow] :as workspace} :- as/Workspace]
@@ -391,9 +421,11 @@
         invokers (reduce-kv 
                   (fn [a k v]
                     (assoc a k
-                           (async/pipeline 1 (first (vals (:outbound v))) (map (k (:catalog workspace))) (first (vals (:inbound v))))))
+                           (async/pipeline 1 (first (vals (:outbound v))) (map (catalog-function workspace k)) (first (vals (:inbound v))))))
                   {} with-channels)]
-    [with-channels routers invokers]))
+    (doseq [x (channel with-channels :_src)]
+      (async/>!! x :start))
+    (async/<!! (first (channel with-channels :_dest)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
