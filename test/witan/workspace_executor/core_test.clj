@@ -18,10 +18,12 @@
 
 (defn inc*
   [{:keys [number]} _]
+  (println "inc" number)
   {:number (inc number)})
 
 (defn mul2
   [{:keys [number]} _]
+  (println "mul2" number)
   {:number (* number 2)})
 
 (defn mulX
@@ -35,6 +37,11 @@
 (defn ->str
   [{:keys [thing]} _]
   {:out-str (str thing)})
+
+(defn finish?
+  [{:keys [number]} _]
+  (println "Finish?" (> number 10))
+  (> number 10))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -91,11 +98,18 @@
                      :witan/display-name "The value we want to string-ify"}]
     :witan/outputs [{:witan/schema       s/Str
                      :witan/key          :out-str
-                     :witan/display-name "String representation"}]}])
+                     :witan/display-name "String representation"}]}
+   {:witan/fn      :foo/finish?
+    :witan/impl    'witan.workspace-executor.core-test/finish?
+    :witan/version "1.0"
+    :witan/predicate? true
+    :witan/inputs  [{:witan/schema       s/Any
+                     :witan/key          :number
+                     :witan/display-name "True if the number is > 10"}]}])
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(deftest happy-path-tests
+(deftest happy-path-tests-1
   (testing "Happy path (linear) test"
     (let [workflow [[:a :b] [:b :c]]
           catalog [{:witan/name :a
@@ -118,8 +132,9 @@
                      :contracts contracts}
           result (s/with-fn-validation (wex/execute workspace))]
       (is result)
-      (is (= result {:number 12}))))
+      (is (= result {:number 12})))))
 
+(deftest happy-path-tests-2
   (testing "Happy path (merge w/output mapping) test"
     (let [workflow [[:a :c] [:b :c] [:a :d]]
           catalog [{:witan/name :a
@@ -147,6 +162,32 @@
                     :witan/inputs [{:witan/input-src-key :number}]
                     :witan/outputs [{:witan/output-src-key :number
                                      :witan/output-dest-key :number2}]}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          result (s/with-fn-validation (wex/execute workspace))]
+      (is result)
+      (is (= result {:number 6 :number2 3})))))
+
+(deftest happy-path-tests-3
+  (testing "Happy path test with a loop"
+    (let [workflow [[:a [:finish? :b :a]]]
+          catalog [{:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"
+                    :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
+                                    :witan/input-src-key  1
+                                    :witan/input-dest-key :number}]}
+                   {:witan/name :b
+                    :witan/fn :foo/mul2
+                    :witan/version "1.0"
+                    :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
+                                    :witan/input-src-key  2
+                                    :witan/input-dest-key :number}]}
+                   {:witan/name :finish?
+                    :witan/fn :foo/finish?
+                    :witan/version "1.0"
+                    :witan/inputs [{:witan/input-src-key :number}]}]
           workspace {:workflow  workflow
                      :catalog   catalog
                      :contracts contracts}

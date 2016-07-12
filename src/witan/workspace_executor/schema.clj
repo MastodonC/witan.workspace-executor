@@ -13,7 +13,7 @@
 (def WorkflowNode
   [(s/one s/Keyword "from")
    (s/one
-    (s/conditional 
+    (s/conditional
      keyword? s/Keyword
      :else WorkflowBranch)
     "to")])
@@ -31,13 +31,30 @@
    :witan/key          s/Keyword
    :witan/display-name s/Str})
 
-(def Contract
+(def ContractBase
   {:witan/impl s/Symbol
    :witan/fn   s/Keyword
    :witan/version s/Str ;; TODO check semver
-   :witan/outputs [ContractOutput]
-   (s/optional-key :witan/inputs) [ContractInput]
-   (s/optional-key :witan/params-schema) (s/maybe s/Any)})
+   (s/optional-key :witan/params-schema) (s/maybe {s/Keyword s/Any})})
+
+(def ContractFn
+  (merge
+   ContractBase
+   {:witan/outputs [ContractOutput]
+    (s/optional-key :witan/inputs) [ContractInput]}))
+
+(def ContractPred
+  (merge
+   ContractBase
+   {:witan/predicate? s/Bool
+    (s/optional-key :witan/inputs) [ContractInput]}))
+
+(def Contract
+  (s/conditional
+   :witan/predicate?
+   ContractPred
+   :else
+   ContractFn))
 
 (def Input
   {:witan/input-src-key s/Any ;; in this context, 'key' could be a string (such as s3 key)

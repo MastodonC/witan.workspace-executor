@@ -20,6 +20,9 @@
         version                (:witan/version catalog-entry)]
     (some #(when (and (= (:witan/fn %) fnc) (= (:witan/version %) version)) %) contracts)))
 
+(def branch?
+  #(and (vector? %) (= 3 (count %))))
+
 (s/defn workflow->long-hand-workflow
   [wf :- as/Workflow]
   (let [fnc-froms   (fn [k ws]
@@ -27,11 +30,22 @@
                            (filter (fn [y] (some #{k} (-> y (second) :to))))
                            (reduce (fn [a c] (conj a (first c))) [])
                            (not-empty)))
+        predicates  (->> wf
+                         (map second)
+                         (filter branch?))
         with-to     (->> wf
-                         (reduce (fn [x [from to]] (assoc x from (conj (get x from []) to))) {})
-                         (map (fn [[n t]] (hash-map n {:to t}))))
+                         (reduce (fn [x [from to]]
+                                   (let [to' (if (branch? to) (first to) to)]
+                                     (assoc x from (conj (get x from []) to')))) {})
+                         (map (fn [[n t]] (hash-map n {:to t})))
+                         (into {}))
+        with-to-with-preds (->> predicates
+                                (reduce (fn [a [pred break loop]]
+                                          (-> a
+                                              (assoc-in [pred :to] (vec (concat (get-in a [pred :to] []) [break loop])))
+                                              (assoc-in [pred :pred?] true))) with-to))
         with-leaves (->> (set (flatten wf))
-                         (reduce (fn [a c] (if (contains? a c) a (conj a (hash-map c {})))) (into {} with-to)))
+                         (reduce (fn [a c] (if (contains? a c) a (conj a (hash-map c {})))) (into {} with-to-with-preds)))
         with-froms  (reduce (fn [a x] (if-let [froms (fnc-froms (first x) with-leaves)]
                                         (conj a (update-in x [1] assoc :from froms))
                                         (conj a x))) [] with-leaves)]
@@ -187,11 +201,16 @@
          (IllegalArgumentException.
           (str "The following nodes will experience a clash of inputs from their parents (consider using output mappings): " clashing-outputs)))))))
 
-(def leaf?
-  #(not (contains? % :to)))
+(defn leaf?
+  [d]
+  (when-not (:pred? d)
+    (not (contains? d :to))))
 
-(def root?
-  #(not (contains? % :from)))
+(defn root?
+  [d]
+  (when-not (:pred? d)
+    (let [diff (clojure.set/difference (set (:from d)) (set (:to d)))]
+      (empty? diff))))
 
 (defn- validate-params
   [contract catalog-entry]
@@ -273,6 +292,7 @@
     (-> (apply d/zip (vals inputs))
         (d/chain
          #(d/future
+            (println "IN FUTURE" node-key)
             (let [internal     (->> (disj (set %) :_start) (reduce conj {}))
                   params       (validate-params contract catalog-entry)
                   result       (-> node-key
@@ -295,35 +315,62 @@
   [[k v] inputs]
   (vector k (assoc v :outputs (into {} (map (fn [x] (vector x (get-in inputs [x :inputs k]))) (:to v))))))
 
-(s/defn execute
+(s/defn execute*
   [{:keys [workflow] :as workspace} :- as/Workspace]
   (validate-workspace workspace)
   (let [nodes        (->> workflow
                           (workflow->long-hand-workflow)
                           (reduce-kv (fn [m k v] (assoc m k (assoc v :inputs (if (root? v) {:_root (d/deferred)} nil)))) {}))
-        root-nodes   (reduce-kv (fn [m k v] (if (root? v) (conj m k) m)) [] nodes)
-        with-inputs  (walk/prewalk
-                      (fn [x] (cond-> x
-                                (and (vector? x) (-> x second map?) (contains? (-> x second) :from))
-                                (add-inputs))) nodes)
-        with-outputs (walk/prewalk
-                      (fn [x] (cond-> x
-                                (and (vector? x) (-> x second map?) (contains? (-> x second) :to))
-                                (add-outputs with-inputs))) with-inputs)
-        with-futures (reduce-kv (fn [m k v] (assoc-in m [k :future] (create-future workspace k v))) with-outputs with-outputs)]
-    ;; kick off
-    (run! #(d/success! (-> with-futures  % :inputs :_root) :_start) root-nodes)
-    ;; wait for finished futures
-    (-> (apply d/zip (map (fn [[k v]] (:future v)) with-futures))
-        (d/chain)
-        (d/catch Exception #(let [ex %]
-                              (log/error ex)
-                              (st/print-stack-trace ex)
-                              (throw ex)))
-        (deref))
-    ;; gather results
-    (->> with-futures
-         (reduce-kv (fn [m k v] (if (leaf? v) (conj m (-> v :future deref)) m)) {}))))
+        root-nodes   (not-empty (reduce-kv (fn [m k v] (if (root? v) (conj m k) m)) [] nodes))]
+    (if-not root-nodes
+      (throw (Exception. "Can't start without any root nodes."))
+      (let [with-inputs  (walk/prewalk
+                          (fn [x] (cond-> x
+                                    (and (vector? x) (-> x second map?) (contains? (-> x second) :from))
+                                    (add-inputs))) nodes)
+            with-outputs (walk/prewalk
+                          (fn [x] (cond-> x
+                                    (and (vector? x) (-> x second map?) (contains? (-> x second) :to))
+                                    (add-outputs with-inputs))) with-inputs)
+            with-futures (reduce-kv (fn [m k v] (assoc-in m [k :future] (create-future workspace k v))) with-outputs with-outputs)]
+        ;; kick off
+        (println "Running..." with-futures)
+        (run! #(d/success! (-> with-futures  % :inputs :_root) :_start) root-nodes)
+        ;; wait for finished futures
+        (-> (apply d/zip (map (fn [[k v]] (:future v)) with-futures))
+            (d/chain)
+            (d/catch Exception #(let [ex %]
+                                  (log/error ex)
+                                  (st/print-stack-trace ex)
+                                  (throw ex)))
+            (deref))
+        ;; gather results
+        (->> with-futures
+             (reduce-kv (fn [m k v] (if (leaf? v) (conj m (-> v :future deref)) m)) {}))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn create-channel-map
+  [{:keys [to from] :as m}]
+  (-> m
+      (assoc :inbound  (into {} (map #(hash-map % (async/chan)) from)))
+      (assoc :outbound (into {} (map #(hash-map % (async/chan)) to)))))
+
+(defn create-routing
+  [node-key {:keys [inbound outbound] :as m}]
+  (-> m
+      (assoc :runnable )))
+
+(s/defn execute
+  [{:keys [workflow] :as workspace} :- as/Workspace]
+  #_(validate-workspace workspace)
+  (let [nodes (workflow->long-hand-workflow workflow)
+        root-nodes    (not-empty (reduce-kv (fn [m k v] (if (root? v) (conj m k) m)) [] nodes))
+        with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
+        routers       (map create-routing with-channels)]
+    with-channels))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (s/defn workflow->graphviz
