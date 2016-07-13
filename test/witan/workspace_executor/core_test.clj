@@ -94,67 +94,39 @@
   [msg params]
   msg)
 
+(defworkflowpred gte
+  {:witan/name :test.out/gte
+   :witan/version "1.0"
+   :witan/input-schema {:number s/Num}
+   :witan/param-schema {:threshold s/Num}}
+  [msg params]
+  (prn msg params)
+  (>= (:number msg) (:threshold params)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def contracts
   [{:witan/fn      :foo/inc
     :witan/impl    :witan.workspace-executor.core-test/inc*
-    :witan/version "1.0"
-    :witan/params-schema nil
-    :witan/inputs  [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]
-    :witan/outputs [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]}
+    :witan/version "1.0"}
+   {:witan/fn      :foo/gte
+    :witan/impl    :witan.workspace-executor.core-test/gte
+    :witan/version "1.0"}
    {:witan/fn      :foo/mul2
     :witan/impl    :witan.workspace-executor.core-test/mul2
-    :witan/version "1.0"
-    :witan/params-schema nil
-    :witan/inputs  [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]
-    :witan/outputs [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]}
+    :witan/version "1.0"}
    {:witan/fn      :foo/mulX
     :witan/impl    :witan.workspace-executor.core-test/mulX
-    :witan/version "1.0"
-    :witan/params-schema MulXParams
-    :witan/inputs  [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]
-    :witan/outputs [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]}
+    :witan/version "1.0"}
    {:witan/fn      :foo/add
     :witan/impl    :witan.workspace-executor.core-test/add
-    :witan/version "1.0"
-    :witan/params-schema nil
-    :witan/inputs  [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}
-                    {:witan/schema       FooNumber
-                     :witan/key          :to-add
-                     :witan/display-name "To add"}]
-    :witan/outputs [{:witan/schema       FooNumber
-                     :witan/key          :number
-                     :witan/display-name "Number"}]}
-
+    :witan/version "1.0"}
    {:witan/fn      :foo/->str
     :witan/impl    :witan.workspace-executor.core-test/->str
-    :witan/version "1.0"
-    :witan/inputs  [{:witan/schema       s/Any
-                     :witan/key          :thing
-                     :witan/display-name "The value we want to string-ify"}]
-    :witan/outputs [{:witan/schema       s/Str
-                     :witan/key          :out-str
-                     :witan/display-name "String representation"}]}
+    :witan/version "1.0"}
    {:witan/fn      :foo/rename
     :witan/impl    :witan.workspace-executor.core-test/rename
-    :witan/version "1.0"
-    :witan/inputs  []
-    :witan/outputs []}
+    :witan/version "1.0"}
    {:witan/fn      :foo/finish?
     :witan/impl    :witan.workspace-executor.core-test/finish?
     :witan/version "1.0"
@@ -164,15 +136,10 @@
                      :witan/display-name "True if the number is > 10"}]}
    {:witan/fn :foo/putter
     :witan/impl :witan.workspace-executor.core-test/param-spitter
-    :witan/version "1.0"
-    :witan/params-schema {:number s/Num}
-    :witan/inputs  []
-    :witan/outputs []}
+    :witan/version "1.0"}
    {:witan/fn :foo/printer
     :witan/impl :witan.workspace-executor.core-test/msg-spitter
-    :witan/version "1.0"
-    :witan/inputs  []
-    :witan/outputs []}])
+    :witan/version "1.0"}])
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -277,6 +244,31 @@
           result (wex/run!! workspace' {})]
       (is result)
       (is (= result [{:number 3 :blah 4 :bliz 6}])))))
+
+(deftest simple-loop
+  (testing "Very basic workspace"
+    (let [workflow [[:in :a] [:a [:gte :out :a]]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:number 1}}
+                   {:witan/name :gte
+                    :witan/fn :foo/gte
+                    :witan/version "1.0"
+                    :witan/params {:threshold 10}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          workspace' (s/with-fn-validation (wex/build! workspace))
+          result (wex/run!! workspace' {})]
+      (is result)
+      (is (= [{:number 10}] result)))))
 
 #_(deftest happy-path-tests-1
     (testing "Basic, but longer workspace"

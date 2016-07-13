@@ -40,7 +40,7 @@
 (def ContractFn
   (merge
    ContractBase
-   {:witan/outputs [ContractOutput]
+   {;:witan/outputs [ContractOutput]
     (s/optional-key :witan/inputs) [ContractInput]}))
 
 (def ContractPred
