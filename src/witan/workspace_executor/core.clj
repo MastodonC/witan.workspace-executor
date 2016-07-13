@@ -502,9 +502,9 @@
                                                 (map (catalog-function workspace k))
                                                 (:inbound v))))
                        {} (remove (comp :pred? second) with-channels))]
-    {:tasks with-channels
+    {:tasks   with-channels
      :ingress ingress
-     :egress egress}))
+     :egress  egress}))
 
 (defn run!!
   [{:keys [ingress egress tasks] :as workspace} init-data]

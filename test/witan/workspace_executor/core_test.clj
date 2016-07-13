@@ -270,58 +270,35 @@
       (is result)
       (is (= [{:number 10}] result)))))
 
-#_(deftest happy-path-tests-1
-    (testing "Basic, but longer workspace"
-      (let [workflow [[:in :a] [:a :b] [:b :c] [:c :out]]
-            catalog [{:witan/name :in
-                      :witan/fn :foo/putter
-                      :witan/version "1.0"
-                      :witan/params {:number 1}}
-                     {:witan/name :a
-                      :witan/fn :foo/inc
-                      :witan/version "1.0"}
-                     {:witan/name :b
-                      :witan/fn :foo/mul2
-                      :witan/version "1.0"}
-                     {:witan/name :c
-                      :witan/fn :foo/mulX
-                      :witan/version "1.0"
-                      :witan/params {:x 3}}
-                     {:witan/name :out
-                      :witan/fn :foo/printer
-                      :witan/version "1.0"}]
-            workspace {:workflow  workflow
-                       :catalog   catalog
-                       :contracts contracts}
-            result (s/with-fn-validation (wex/execute workspace))]
-        (is result)
-        (is (= [{:number 12}] result)))))
+(deftest complex-1
+  (testing "Merge within a loop"
+    (let [workflow [[:in :a] [:a [:gte :out :a]]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:number 1}}
+                   {:witan/name :gte
+                    :witan/fn :foo/gte
+                    :witan/version "1.0"
+                    :witan/params {:threshold 10}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          workspace' (s/with-fn-validation (wex/build! workspace))
+          result (wex/run!! workspace' {})]
+      (is result)
+      (is (= [{:number 10}] result)))))
 
-#_(deftest happy-path-tests-3
-    (testing "Happy path test with a loop"
-      (let [workflow [[:a [:finish? :b :a]]]
-            catalog [{:witan/name :a
-                      :witan/fn :foo/inc
-                      :witan/version "1.0"
-                      :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
-                                      :witan/input-src-key  1
-                                      :witan/input-dest-key :number}]}
-                     {:witan/name :b
-                      :witan/fn :foo/mul2
-                      :witan/version "1.0"
-                      :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
-                                      :witan/input-src-key  2
-                                      :witan/input-dest-key :number}]}
-                     {:witan/name :finish?
-                      :witan/fn :foo/finish?
-                      :witan/version "1.0"
-                      :witan/inputs [{:witan/input-src-key :number}]}]
-            workspace {:workflow  workflow
-                       :catalog   catalog
-                       :contracts contracts}
-            result (s/with-fn-validation (wex/execute workspace))]
-        (is result)
-        (is (= result {:number 6 :number2 3})))))
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftest valid-workspace-tests
   (testing "Workspace is valid"
