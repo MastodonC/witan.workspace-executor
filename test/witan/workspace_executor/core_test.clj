@@ -272,16 +272,26 @@
 
 (deftest complex-1
   (testing "Merge within a loop"
-    (let [workflow [[:in :a] [:a [:gte :out :a]]]
-          catalog [{:witan/name :in
+    (let [workflow [[:in1 :a]
+                    [:in2 :b]
+                    [:a :b]
+                    [:b [:gte :out :a]]]
+          catalog [{:witan/name :in1
                     :witan/fn :foo/putter
                     :witan/version "1.0"
                     :witan/params {:number 1}}
+                   {:witan/name :in2
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:foo :bar}}
                    {:witan/name :gte
                     :witan/fn :foo/gte
                     :witan/version "1.0"
                     :witan/params {:threshold 10}}
                    {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :b
                     :witan/fn :foo/inc
                     :witan/version "1.0"}
                    {:witan/name :out
@@ -293,7 +303,7 @@
           workspace' (s/with-fn-validation (wex/build! workspace))
           result (wex/run!! workspace' {})]
       (is result)
-      (is (= [{:number 10}] result)))))
+      (is (= [{:number 10 :foo :bar}] result)))))
 
 
 
