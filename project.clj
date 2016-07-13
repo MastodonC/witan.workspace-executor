@@ -12,6 +12,7 @@
                  [aero "0.2.0"]
                  [manifold "0.1.4"]
                  [rhizome "0.2.5"]
-                 [prismatic/schema "1.1.0"]]
+                 [prismatic/schema "1.1.0"]
+                 [witan.workspace-api "0.1.8-SNAPSHOT"]]
   :repositories [["releases" {:url "https://clojars.org/repo"
                               :creds :gpg}]])

@@ -381,19 +381,21 @@
 
 (defn linear-route
   [with-channels from to]
-  {:from (get-in with-channels [from :outbound :mult])
-   :to   (get-in with-channels [to :inbound])
+  {;;:from (get-in with-channels [from :outbound :mult])
+   ;;:to   (get-in with-channels [to :inbound])
    :pipe (async/tap (get-in with-channels [from :outbound :mult])
                     (get-in with-channels [to :inbound]))})
 
 (defn merge-route
   [with-channels to froms]
-  (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)]
-    (doseq [[f ch] from-chs]
-      (async/tap (get-in with-channels [f :outbound :mult]) ch))
-    {:from (get-in with-channels [from :outbound :mult])
-     :to   (get-in with-channels [to :inbound])
-     :pipe ()}))
+  (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
+        _ (doseq [[f ch] from-chs]
+            (async/tap (get-in with-channels [f :outbound :mult]) ch))
+        merged-chs (async/merge (vals from-chs))]
+
+    {:pipe (async/pipe
+            (async/reduce (fn [a r] (prn "Merging" r "into" a) (merge a r)) {} merged-chs)
+            (get-in with-channels [to :inbound]))}))
 
 (defn meld-name
   [f s]
@@ -447,7 +449,7 @@
           (egress-node v))
         nodes)))
 
-(s/defn execute
+(s/defn build!
   [{:keys [workflow] :as workspace} :- as/Workspace]
   #_(validate-workspace workspace)
   (let [nodes         (workflow->long-hand-workflow workflow)
@@ -456,12 +458,9 @@
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
         many-to-one   (into {} (filter (fn [[k v]] (>= (count (:from v)) 2)) with-channels))
         one-to-many   (into {} (filter (fn [[k v]] (< (count (:from v)) 2)) with-channels))
-        _ (prn "M2O" (keys many-to-one))
-        _ (prn "O2M" (keys one-to-many))
         o2m-routers   (reduce-kv (fn [a k v]
                                    (reduce
                                     (fn [a to]
-                                      (prn "o2m node" k "routing to" to)
                                       (assoc a
                                              (meld-name k to)
                                              (linear-route with-channels k to)))
@@ -469,7 +468,6 @@
                                     (remove (set (keys many-to-one)) (:to v))))
                                  {} with-channels)
         m20-routers   (reduce-kv (fn [a k v]
-                                   (prn "m2o node" k "routing to" (:from v))
                                    (assoc a k (merge-route with-channels k (:from v))))
                                  {} many-to-one)
         invokers      (reduce-kv
@@ -480,14 +478,22 @@
                                                 (map (catalog-function workspace k))
                                                 (:inbound v))))
                        {} with-channels)]
-    (doseq [in ingress]
-      (async/>!! (get-in with-channels [in :inbound]) :start))
-    (reduce
-     (fn [a e]
-       (conj a
-             (async/<!! (get-in with-channels [e :outbound :chan]))))
-     []
-     egress)))
+    {:tasks with-channels
+     :ingress ingress
+     :egress egress}))
+
+(defn run!!
+  [{:keys [ingress egress tasks] :as workspace} init-data]
+  (doseq [in ingress]
+    (let [c (get-in tasks [in :inbound])]
+      (async/>!! c init-data)
+      (async/close! c)))
+  (reduce
+   (fn [a e]
+     (conj a
+           (async/<!! (get-in tasks [e :outbound :chan]))))
+   []
+   egress))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
