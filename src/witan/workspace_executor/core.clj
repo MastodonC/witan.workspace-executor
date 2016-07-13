@@ -4,8 +4,8 @@
             [clojure.core.async :as async]
             [clojure.stacktrace :as st]
             [clojure.walk :as walk]
-            [com.rpl.specter :as spec 
-             :refer [transform select selected? filterer setval view collect comp-paths keypath
+            [com.rpl.specter :as spec
+             :refer [select* select-one* selected? filterer view collect comp-paths keypath
                      END ALL LAST FIRST VAL BEGINNING STOP]]
             [rhizome.viz :as viz]
             [taoensso.timbre :as log]
@@ -379,12 +379,21 @@
                          {:chan (async/chan)}
                          (chan-pair)))))
 
-(defn route
+(defn linear-route
   [with-channels from to]
   {:from (get-in with-channels [from :outbound :mult])
-   :to (get-in with-channels [to :inbound])
+   :to   (get-in with-channels [to :inbound])
    :pipe (async/tap (get-in with-channels [from :outbound :mult])
                     (get-in with-channels [to :inbound]))})
+
+(defn merge-route
+  [with-channels to froms]
+  (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)]
+    (doseq [[f ch] from-chs]
+      (async/tap (get-in with-channels [f :outbound :mult]) ch))
+    {:from (get-in with-channels [from :outbound :mult])
+     :to   (get-in with-channels [to :inbound])
+     :pipe ()}))
 
 (defn meld-name
   [f s]
@@ -401,16 +410,16 @@
 
 (defn catalog-function
   [{:keys [catalog contracts]} label]
-  (let [fn-label (select-keys 
-                  (spec/select-one 
+  (let [fn-label (select-keys
+                  (select-one*
                    [(filterer :witan/name #(= label %)) ALL]
                    catalog)
                   [:witan/fn :witan/version :witan/params])
-        func (spec/select-one
+        func (select-one*
               [(filterer #(= (:witan/fn %)
-                             (:witan/fn fn-label)) 
+                             (:witan/fn fn-label))
                          #(= (:witan/version %)
-                             (:witan/version fn-label))) 
+                             (:witan/version fn-label)))
                ALL
                :witan/impl]
               contracts)]
@@ -418,14 +427,14 @@
 
 (defn channel
   [with-channels c]
-  (spec/select
+  (select*
    [(spec/walker c) c]
    with-channels))
 
 (defn ingress-nodes
   [nodes]
   (map first
-       (filter 
+       (filter
         (fn [[k v]]
           (ingress-node v))
         nodes)))
@@ -441,32 +450,40 @@
 (s/defn execute
   [{:keys [workflow] :as workspace} :- as/Workspace]
   #_(validate-workspace workspace)
-  (let [nodes (workflow->long-hand-workflow workflow)
-        ingress (ingress-nodes nodes)
-        egress (egress-nodes nodes)
+  (let [nodes         (workflow->long-hand-workflow workflow)
+        ingress       (ingress-nodes nodes)
+        egress        (egress-nodes nodes)
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
-        routers       (reduce-kv (fn [a k v]                                    
+        many-to-one   (into {} (filter (fn [[k v]] (>= (count (:from v)) 2)) with-channels))
+        one-to-many   (into {} (filter (fn [[k v]] (< (count (:from v)) 2)) with-channels))
+        _ (prn "M2O" (keys many-to-one))
+        _ (prn "O2M" (keys one-to-many))
+        o2m-routers   (reduce-kv (fn [a k v]
                                    (reduce
-                                    (fn [a to] 
-                                      (assoc a 
+                                    (fn [a to]
+                                      (prn "o2m node" k "routing to" to)
+                                      (assoc a
                                              (meld-name k to)
-                                             (route with-channels k to)))
+                                             (linear-route with-channels k to)))
                                     a
-                                    (:to v)))
+                                    (remove (set (keys many-to-one)) (:to v))))
                                  {} with-channels)
-        invokers (reduce-kv 
-                  (fn [a k v]
-                    (assoc a k
-                           (async/pipeline 1  
-                                           (:chan (:outbound v)) 
-                                           (map (catalog-function workspace k)) 
-                                           (:inbound v))))
-                  {} with-channels)]
+        m20-routers   (reduce-kv (fn [a k v]
+                                   (prn "m2o node" k "routing to" (:from v))
+                                   (assoc a k (merge-route with-channels k (:from v))))
+                                 {} many-to-one)
+        invokers      (reduce-kv
+                       (fn [a k v]
+                         (assoc a k
+                                (async/pipeline 1
+                                                (:chan (:outbound v))
+                                                (map (catalog-function workspace k))
+                                                (:inbound v))))
+                       {} with-channels)]
     (doseq [in ingress]
       (async/>!! (get-in with-channels [in :inbound]) :start))
     (reduce
      (fn [a e]
-       (prn "A: " a e)
        (conj a
              (async/<!! (get-in with-channels [e :outbound :chan]))))
      []

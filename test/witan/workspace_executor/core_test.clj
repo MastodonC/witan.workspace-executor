@@ -1,8 +1,5 @@
 (ns witan.workspace-executor.core-test
   (:require [clojure.test :refer :all]
-            [com.rpl.specter :as spec 
-             :refer [transform select selected? filterer setval view collect comp-paths keypath
-                     END ALL LAST FIRST VAL BEGINNING STOP]]
             [schema.core :as s]
             [witan.workspace-executor.core :as wex]))
 
@@ -21,12 +18,10 @@
 
 (defn inc*
   [{:keys [number]} _]
-  (println "inc" number)
   {:number (inc number)})
 
 (defn mul2
   [{:keys [number]} _]
-  (println "mul2" number)
   {:number (* number 2)})
 
 (defn mulX
@@ -35,6 +30,7 @@
 
 (defn add
   [{:keys [number to-add]} _]
+  (println "adding" number "+" to-add)
   {:number (+ number to-add)})
 
 (defn ->str
@@ -43,7 +39,6 @@
 
 (defn finish?
   [{:keys [number]} _]
-  (println "Finish?" (> number 10))
   (> number 10))
 
 (defn param-spitter
@@ -134,7 +129,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftest linear-one-step
-  (testing "Happy path (linear) test"
+  (testing "Very basic workspace"
     (let [workflow [[:in :a] [:a :out]]
           catalog [{:witan/name :in
                     :witan/fn :foo/putter
@@ -154,7 +149,7 @@
       (is (= [{:number 2}] result)))))
 
 (deftest fan-out-one-step
-  (testing "Happy path (linear) test"
+  (testing "Basic workspace that has multiple outputs"
     (let [workflow [[:in :a] [:a :out] [:a :out2]]
           catalog [{:witan/name :in
                     :witan/fn :foo/putter
@@ -176,8 +171,32 @@
       (is result)
       (is (= [{:number 2} {:number 2}] result)))))
 
+(deftest merge-one-step
+  (testing "Basic test that merges"
+    (let [workflow [[:in :a] [:in2 :a] [:a :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:number 1}}
+                   {:witan/name :in2
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:to-add 2}}
+                   {:witan/name :a
+                    :witan/fn :foo/add
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          result (s/with-fn-validation (wex/execute workspace))]
+      (is result)
+      (is (= [{:number 3}] result)))))
+
 (deftest happy-path-tests-1
-  (testing "Happy path (linear) test"
+  (testing "Basic, but longer workspace"
     (let [workflow [[:in :a] [:a :b] [:b :c] [:c :out]]
           catalog [{:witan/name :in
                     :witan/fn :foo/putter
@@ -203,8 +222,8 @@
       (is result)
       (is (= [{:number 12}] result)))))
 
-(deftest happy-path-tests-2
-  (testing "Happy path (merge w/output mapping) test"
+(deftest diamond-test
+  (testing "Workspace creates a diamond shape (fan then merge)"
     (let [workflow [[:in :a] [:a :b] [:a :c] [:b :d] [:c :d] [:d :out]]
           catalog [{:witan/name :in
                     :witan/fn :foo/putter
