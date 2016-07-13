@@ -418,14 +418,22 @@
   (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
         _ (doseq [[f ch] from-chs]
             (async/tap (get-in with-channels [f :outbound :mult]) ch))
-        merged-chs (async/merge (vals from-chs))]
-    {:pipe (async/pipe
-            (async/reduce (fn [a r] (prn "Merging" r "into" a) (merge a r)) {} merged-chs)
-            (get-in with-channels [to :inbound]))}))
+        merged-results (async/chan)]
+    (async/pipe merged-results (get-in with-channels [to :inbound]))
+    (async/go-loop [remaining-chs (vals from-chs)
+                    vals {}]
+      (let [v (async/<!! (first remaining-chs))
+            _ (prn "Merging" v "into" vals)
+            vals' (merge vals v)]
+        (if (next remaining-chs)
+          (recur (next remaining-chs) vals')
+          (do
+            (async/>! merged-results vals')
+            (recur (vals from-chs) {})))))))
 
 (defn predicate-route
   [workspace with-channels pred node]
-  (let [[pass fail] (async/split (catalog-function workspace pred) 
+  (let [[pass fail] (async/split (catalog-function workspace pred)
                                  (get-in with-channels [pred :inbound]))]
     {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
      :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
@@ -464,16 +472,12 @@
   [{:keys [workflow] :as workspace} :- as/Workspace]
   #_(validate-workspace workspace)
   (let [nodes         (workflow->long-hand-workflow workflow)
-        _ (prn nodes)
         ingress       (ingress-nodes nodes)
         egress        (egress-nodes nodes)
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
         predicates    (into {} (filter (fn [[k v]] (:pred? v)) with-channels))
         many-to-one   (into {} (filter (fn [[k v]] (>= (count (remove-from-preds v)) 2)) with-channels))
         one-to-many   (into {} (filter (fn [[k v]] (and (< (count (remove-from-preds v)) 2) (not (:pred? v)))) with-channels))
-        _ (prn "P: " predicates)
-        _ (prn "M: " many-to-one)
-        _ (prn "O: " one-to-many)
         o2m-routers   (reduce-kv (fn [a k v]
                                    (reduce
                                     (fn [a to]
@@ -487,7 +491,7 @@
                                    (assoc a k (merge-route with-channels k (remove-from-preds v))))
                                  {} many-to-one)
         pred-routers (reduce-kv (fn [a k v]
-                                  (assoc a k 
+                                  (assoc a k
                                          (predicate-route workspace with-channels k v)))
                                 {} predicates)
         invokers      (reduce
@@ -506,15 +510,19 @@
   [{:keys [ingress egress tasks] :as workspace} init-data]
   (doseq [in ingress]
     (let [c (get-in tasks [in :inbound])]
-      (async/>!! c init-data)
-      ;(async/close! c)
-      ))
+      (async/>!! c init-data)))
   (reduce
    (fn [a e]
      (conj a
            (async/<!! (get-in tasks [e :outbound :chan]))))
    []
    egress))
+
+(defn kill!!
+  [{:keys [ingress egress tasks] :as workspace} init-data]
+  (doseq [in ingress]
+    (let [c (get-in tasks [in :inbound])]
+      (async/close! c))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
