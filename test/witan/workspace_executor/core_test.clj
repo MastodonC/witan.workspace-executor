@@ -48,10 +48,12 @@
 
 (defn param-spitter
   [_ params]
+  (prn params)
   params)
 
 (defn msg-spitter
   [msg params]
+  (prn "MS: " msg)
   msg)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -131,6 +133,49 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(deftest linear-one-step
+  (testing "Happy path (linear) test"
+    (let [workflow [[:in :a] [:a :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:number 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          result (s/with-fn-validation (wex/execute workspace))]
+      (is result)
+      (is (= [{:number 2}] result)))))
+
+(deftest fan-out-one-step
+  (testing "Happy path (linear) test"
+    (let [workflow [[:in :a] [:a :out] [:a :out2]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:number 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}
+                   {:witan/name :out2
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          result (s/with-fn-validation (wex/execute workspace))]
+      (is result)
+      (is (= [{:number 2} {:number 2}] result)))))
+
 (deftest happy-path-tests-1
   (testing "Happy path (linear) test"
     (let [workflow [[:in :a] [:a :b] [:b :c] [:c :out]]
@@ -156,36 +201,30 @@
                      :contracts contracts}
           result (s/with-fn-validation (wex/execute workspace))]
       (is result)
-      (is (= {:number 12} result)))))
+      (is (= [{:number 12}] result)))))
 
 (deftest happy-path-tests-2
   (testing "Happy path (merge w/output mapping) test"
-    (let [workflow [[:a :c] [:b :c] [:a :d]]
-          catalog [{:witan/name :a
-                    :witan/fn :foo/inc
+    (let [workflow [[:in :a] [:a :b] [:a :c] [:b :d] [:c :d] [:d :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
                     :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
-                                    :witan/input-src-key  1
-                                    :witan/input-dest-key :number}]}
+                    :witan/params {:number 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
                    {:witan/name :b
                     :witan/fn :foo/mul2
-                    :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-fn   'witan.workspace-executor.core-test/get-data
-                                    :witan/input-src-key  2
-                                    :witan/input-dest-key :number}]
-                    :witan/outputs [{:witan/output-src-key :number
-                                     :witan/output-dest-key :to-add}]}
+                    :witan/version "1.0"}
                    {:witan/name :c
                     :witan/fn :foo/add
-                    :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-key :number}
-                                   {:witan/input-src-key :to-add}]}
+                    :witan/version "1.0"}
                    {:witan/name :d
                     :witan/fn :foo/inc
-                    :witan/version "1.0"
-                    :witan/inputs [{:witan/input-src-key :number}]
-                    :witan/outputs [{:witan/output-src-key :number
-                                     :witan/output-dest-key :number2}]}]
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
           workspace {:workflow  workflow
                      :catalog   catalog
                      :contracts contracts}

@@ -353,19 +353,38 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn egress-node
+  [node]
+  (and
+   (empty? (:to node))
+   (:from node)))
+
+(defn ingress-node
+  [node]
+  (and
+   (:to node)
+   (empty? (:from node))))
+
+(defn chan-pair
+  []
+  (let [c (async/chan 10)]
+    {:chan c
+     :mult (async/mult c)}))
+
 (defn create-channel-map
-  [{:keys [to from] :as m}]
-  (-> m
-      (assoc :inbound  (into {} (map #(hash-map % (async/chan)) (or from [:_src]))))
-      (assoc :outbound (into {} (map #(hash-map % (async/chan)) (or to [:_dest]))))))
+  [node]
+  (-> node
+      (assoc :inbound  (async/chan))
+      (assoc :outbound (if (egress-node node)
+                         {:chan (async/chan)}
+                         (chan-pair)))))
 
 (defn route
   [with-channels from to]
-  {:inbound (get-in with-channels [from :outbound to])
-   :outbound (get-in with-channels [to :inbound from])
-   :pipe (async/pipe (get-in with-channels [from :outbound to])
-                     (get-in with-channels [to :inbound from]))
-   })
+  {:from (get-in with-channels [from :outbound :mult])
+   :to (get-in with-channels [to :inbound])
+   :pipe (async/tap (get-in with-channels [from :outbound :mult])
+                    (get-in with-channels [to :inbound]))})
 
 (defn meld-name
   [f s]
@@ -403,11 +422,28 @@
    [(spec/walker c) c]
    with-channels))
 
+(defn ingress-nodes
+  [nodes]
+  (map first
+       (filter 
+        (fn [[k v]]
+          (ingress-node v))
+        nodes)))
+
+(defn egress-nodes
+  [nodes]
+  (map first
+       (filter
+        (fn [[k v]]
+          (egress-node v))
+        nodes)))
+
 (s/defn execute
   [{:keys [workflow] :as workspace} :- as/Workspace]
   #_(validate-workspace workspace)
   (let [nodes (workflow->long-hand-workflow workflow)
-        root-nodes    (not-empty (reduce-kv (fn [m k v] (if (root? v) (conj m k) m)) [] nodes))
+        ingress (ingress-nodes nodes)
+        egress (egress-nodes nodes)
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
         routers       (reduce-kv (fn [a k v]                                    
                                    (reduce
@@ -421,11 +457,20 @@
         invokers (reduce-kv 
                   (fn [a k v]
                     (assoc a k
-                           (async/pipeline 1 (first (vals (:outbound v))) (map (catalog-function workspace k)) (first (vals (:inbound v))))))
+                           (async/pipeline 1  
+                                           (:chan (:outbound v)) 
+                                           (map (catalog-function workspace k)) 
+                                           (:inbound v))))
                   {} with-channels)]
-    (doseq [x (channel with-channels :_src)]
-      (async/>!! x :start))
-    (async/<!! (first (channel with-channels :_dest)))))
+    (doseq [in ingress]
+      (async/>!! (get-in with-channels [in :inbound]) :start))
+    (reduce
+     (fn [a e]
+       (prn "A: " a e)
+       (conj a
+             (async/<!! (get-in with-channels [e :outbound :chan]))))
+     []
+     egress)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
