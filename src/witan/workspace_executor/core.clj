@@ -299,7 +299,7 @@
     (letfn [(descend [from target]
               (swap! visited conj from)
               (let [target-of-loop (get-in with-channels [target :target-of])
-                    froms 
+                    froms
                     (remove #{from}
                             (remove
                              (hash-set target-of-loop)
@@ -307,13 +307,13 @@
                     _ (prn "F: " from " T: " target " FS: " froms " TOF: " target-of-loop " V: " @visited)]
                 (concat froms
                         (if (and target-of-loop (not= target-of-loop pred-ky))
-                          (mapcat (partial descend
-                                           target-of-loop)
-                                  (get-in with-channels [target-of-loop :to]))
+                          (mapcat (partial descend target-of-loop)
+                                  (remove #{target}
+                                          (get-in with-channels [target-of-loop :to])))
                           (mapcat (partial descend target)
                                   (remove #{pred-ky}
                                           (get-in with-channels [target :to])))))))]
-      (let [r (mapcat (partial descend loop-target) 
+      (let [r (mapcat (partial descend loop-target)
                       (remove #{pred-ky}
                               (get-in with-channels [loop-target :to])))]
         (remove (set @visited) r)))))

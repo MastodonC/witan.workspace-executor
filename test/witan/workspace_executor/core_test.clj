@@ -300,31 +300,34 @@
                                           [:a :b]
                                           [:b :c]
                                           [:c [:gte :out :a]]])
-       :a :gte))))  
-  (testing "Inner loop"
-    (is
-     (=
-      [:in2]
-      (wex/gather-replay-nodes
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b [:gte :c :a]]                                         
-                                          [:c [:gte :out :a]]])
        :a :gte))))
-  (testing "Inner loop with inputs should not have those inputs replayed, the inner loop will do that."
-    (is
-     (=
-      [:in2]
-      (wex/gather-replay-nodes
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b :c]
-                                          [:in3 :c]
-                                          [:c [:gtex :d :b]]                                         
-                                          [:d [:gte :out :a]]])
-       :a :gte)))))
+  #_(testing "Inner loop"
+      (is
+       (=
+        [:in2]
+        (wex/gather-replay-nodes
+         (wex/workflow->long-hand-workflow [[:in1 :a]
+                                            [:in2 :b]
+                                            [:a :b]
+                                            [:b [:gte :c :a]]
+                                            [:c [:gte :out :a]]])
+         :a :gte)))))
+
+(deftest inner-loop
+  (let [wf (wex/workflow->long-hand-workflow
+            [[:in1 :a]
+             [:in2 :b]
+             [:a :b]
+             [:b :c]
+             [:in3 :c]
+             [:c [:gtex :d :b]]
+             [:d [:gte :out :a]]])]
+    (testing "Outer loop check should not include merges of inner"
+      (is (= [:in2]
+             (wex/gather-replay-nodes wf :a :gte))))
+    (testing "Inner loop check should not include merges of outer"
+      (is (= [:in3]
+             (wex/gather-replay-nodes wf :b :gtex))))))
 
 (deftest internal-merge-loop
   (testing "Loop with an internal merge"
