@@ -270,6 +270,77 @@
       (is result)
       (is (= [{:number 10}] result)))))
 
+
+(deftest gather-replay-nodes-test
+  (testing "Tight loop detection"
+    (is
+     (=
+      []
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in :a]
+                                          [:a [:gte :out :a]]])
+       :a :gte))))
+  (testing "Tight loop detection"
+    (is
+     (=
+      [:in2]
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b [:gte :out :a]]])
+       :a :gte))))
+  (testing "Longer loop leg"
+    (is
+     (=
+      [:in2]
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b :c]
+                                          [:c [:gte :out :a]]])
+       :a :gte))))  
+  (testing "Inner loop"
+    (is
+     (=
+      [:in2]
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b [:gte :c :a]]                                         
+                                          [:c [:gte :out :a]]])
+       :a :gte))))
+  (testing "Inner loop with inputs should not have those inputs replayed, the inner loop will do that."
+    (is
+     (=
+      [:in2]
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b :c]
+                                          [:in3 :c]
+                                          [:c [:gtex :d :b]]                                         
+                                          [:d [:gte :out :a]]])
+       :a :gte)))))
+
+(deftest internal-merge-loop
+  (testing "Loop with an internal merge"
+    (is
+     (=
+      [:in2 :in3]
+      (wex/gather-replay-nodes
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b :c]
+                                          [:in3 :c]
+                                          [:b :d] [:c :d]
+                                          [:d [:gte :out :a]]])
+       :a :gte)))))
+
 (deftest complex-1
   (testing "Merge within a loop"
     (let [workflow [[:in1 :a]
@@ -304,9 +375,6 @@
           result (wex/run!! workspace' {})]
       (is result)
       (is (= [{:number 10 :foo :bar}] result)))))
-
-
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

@@ -47,7 +47,7 @@
                                           (-> a
                                               (assoc-in [pred :to] (vec (concat (get-in a [pred :to] []) [break loop])))
                                               (assoc-in [pred :pred?] true)
-                                              (update-in [loop :target-of] #(conj %1 pred)))) with-to))
+                                              (assoc-in [loop :target-of] pred))) with-to))
         with-leaves (->> (set (flatten wf))
                          (reduce (fn [a c] (if (contains? a c) a (conj a (hash-map c {})))) (into {} with-to-with-preds)))
         with-froms  (reduce (fn [a x] (if-let [froms (fnc-froms (first x) with-leaves)]
@@ -266,6 +266,13 @@
    :pipe (async/tap (get-in with-channels [from :outbound :mult])
                     (get-in with-channels [to :inbound]))})
 
+(defn val-key
+  [m t]
+  (ffirst (filter (fn [[k v]]
+                    (= v t)) m)))
+
+(def vals-set (comp set vals))
+
 (defn merge-route
   [with-channels to froms]
   (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
@@ -273,21 +280,60 @@
             (async/tap (get-in with-channels [f :outbound :mult]) ch))
         merged-results (async/chan)]
     (async/pipe merged-results (get-in with-channels [to :inbound]))
-    (async/go-loop [remaining-chs (vals from-chs)
-                    vals {}]
-      (let [v (async/<!! (first remaining-chs))
-            _ (prn "Merging" v "into" vals)
-            vals' (merge vals v)]
-        (if (next remaining-chs)
-          (recur (next remaining-chs) vals')
+    (async/go-loop [remaining-chs (vals-set from-chs)
+                    acc {}]
+      (let [_ (prn "Waiting for " (map (partial val-key from-chs) remaining-chs))
+            [v port] (async/alts! (vec remaining-chs))
+            _ (prn "Merging" v "into" acc)
+            acc' (merge acc v)
+            remaining-chs' (disj remaining-chs port)]
+        (if (seq remaining-chs')
+          (recur remaining-chs' acc')
           (do
-            (async/>! merged-results vals')
-            (recur (vals from-chs) {})))))))
+            (async/>! merged-results acc')
+            (recur (vals-set from-chs) {})))))))
+
+(defn gather-replay-nodes
+  [with-channels loop-target pred-ky]
+  (let [visited (atom [])]
+    (letfn [(descend [from target]
+              (swap! visited conj from)
+              (let [target-of-loop (get-in with-channels [target :target-of])
+                    froms 
+                    (remove #{from}
+                            (remove
+                             (hash-set target-of-loop)
+                             (get-in with-channels [target :from])))
+                    _ (prn "F: " from " T: " target " FS: " froms " TOF: " target-of-loop " V: " @visited)]
+                (concat froms
+                        (if (and target-of-loop (not= target-of-loop pred-ky))
+                          (mapcat (partial descend
+                                           target-of-loop)
+                                  (get-in with-channels [target-of-loop :to]))
+                          (mapcat (partial descend target)
+                                  (remove #{pred-ky}
+                                          (get-in with-channels [target :to])))))))]
+      (let [r (mapcat (partial descend loop-target) 
+                      (remove #{pred-ky}
+                              (get-in with-channels [loop-target :to])))]
+        (remove (set @visited) r)))))
+
+(defn predicate-replay
+  [workspace with-channels node pred-ky pred-fn]
+  (let [loop-target (second (:to node))
+        replay-nodes (gather-replay-nodes with-channels loop-target pred-ky)]
+    (fn [value]
+      (if (pred-fn value)
+        true
+        (do
+  ;        (replay-stuff)
+          false)))))
 
 (defn predicate-route
-  [workspace with-channels pred node]
-  (let [[pass fail] (async/split (catalog-function workspace pred)
-                                 (get-in with-channels [pred :inbound]))]
+  [workspace with-channels pred-ky node]
+  (let [[pass fail] (async/split (predicate-replay workspace with-channels node pred-ky
+                                                   (catalog-function workspace pred-ky))
+                                 (get-in with-channels [pred-ky :inbound]))]
     {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
      :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
 
@@ -319,7 +365,7 @@
 
 (defn remove-from-preds
   [node]
-  (remove (set (:target-of node [])) (:from node)))
+  (remove (hash-set (:target-of node)) (:from node)))
 
 (s/defn build!
   [{:keys [workflow] :as workspace} :- as/Workspace]
@@ -328,6 +374,7 @@
         ingress       (ingress-nodes nodes)
         egress        (egress-nodes nodes)
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
+        _ (prn nodes)
         predicates    (into {} (filter (fn [[k v]] (:pred? v)) with-channels))
         many-to-one   (into {} (filter (fn [[k v]] (>= (count (remove-from-preds v)) 2)) with-channels))
         one-to-many   (into {} (filter (fn [[k v]] (and (< (count (remove-from-preds v)) 2) (not (:pred? v)))) with-channels))
