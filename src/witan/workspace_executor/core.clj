@@ -282,7 +282,8 @@
 
 (defprotocol IRouter
   (create!  [this])
-  (replay! [this hint])
+  (replay! [this])
+  (peek [this])
   (edge    [this]))
 
 (deftype LinearRouter [name ^Node from ^Node to state]
@@ -290,8 +291,17 @@
   (create!  [this]
     (async/tap (get-in from [:outbound :mult])
                (get-in to [:inbound]))
+    (let [storage-chan (async/chan)]
+      (async/tap (get-in from [:outbound :mult])
+                 storage-chan)
+      (async/go-loop [store (async/<! storage-chan)]
+        (reset! state store)
+        (recur (async/<! storage-chan))))
     this)
-  (replay! [this hint])
+  (replay! [this]
+    (async/>!! (get-in to [:inbound]) @state))
+  (peek [this]
+    @state)
   (edge   [this]))
 
 (defn port->node
@@ -308,16 +318,16 @@
           linear-routers (map
                           create!
                           (map #(LinearRouter.
-                                 (meld-name (:name %2) (:name %1)) %1 %2 (atom nil))
+                                 (meld-name (:name %1) (:name to)) %1 %2 (atom nil))
                                froms
                                nodes))]
       (async/go-loop [remaining-chs (set nodes)
                       acc {}]
-        (let [;;_ (prn "Waiting for " (map :name remaining-chs))
+        (let [_ (prn "Waiting for " (map :name remaining-chs))
               [v port] (async/alts! (mapv :inbound remaining-chs))
               node (port->node port nodes)
               ;;_ (prn "GOT NODE" node)
-              ;;_ (prn "Merging" v "into" acc)
+              _ (prn "Merging" v "into" acc)
               acc' (merge acc v)
               remaining-chs' (disj remaining-chs node)]
           (if (seq remaining-chs')
@@ -327,30 +337,9 @@
               (async/>! (:inbound to) acc')
               (recur (set nodes) {})))))
       linear-routers))
-  (replay! [this hint])
+  (replay! [this])
+  (peek [this])
   (edge   [this]))
-
-#_(defn merge-route
-    [with-channels to froms]
-    (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
-          _ (doseq [[f ch] from-chs]
-              (async/tap (get-in with-channels [f :outbound :mult]) ch))
-          merged-results (async/chan)]
-      (async/pipe merged-results (get-in with-channels [to :inbound]))
-      (async/go-loop [remaining-chs (vals-set from-chs)
-                      acc {}]
-        (let [_ (prn "Waiting for " (map (partial val-key from-chs) remaining-chs))
-              [v port] (async/alts! (vec remaining-chs))
-              _ (prn "Merging" v "into" acc)
-              acc' (merge acc v)
-              remaining-chs' (disj remaining-chs port)]
-          (if (seq remaining-chs')
-            (recur remaining-chs' acc')
-            (do
-              (async/>! merged-results acc')
-              (recur (vals-set from-chs) {})))))
-      (reduce-kv (fn [a k v]
-                   (assoc a (meld-name k to) v)) {} from-chs)))
 
 (defn gather-replay-nodes
   [with-channels loop-target pred-ky]
@@ -373,7 +362,7 @@
       (let [r (mapcat (partial descend loop-target)
                       (remove #{pred-ky}
                               (get-in with-channels [loop-target :to])))]
-        (remove (set @visited) r)))))
+        (remove #((set @visited) (first %)) r)))))
 
 (defn predicate-replay
   [workspace with-channels merged-routers node pred-ky pred-fn]
@@ -384,6 +373,8 @@
         true
         (let [router-names (map (partial apply meld-name) replay-nodes)]
           (prn "Pred returned false. Replaying" router-names "to" loop-target (keys merged-routers))
+          (doseq [router (map merged-routers router-names)]
+            (.replay! router))
           false)))))
 
 (defn predicate-route
@@ -431,8 +422,7 @@
         predicates    (into {} (filter (fn [[k v]] (:pred? v)) with-channels))
         many-to-one   (into {} (filter (fn [[k v]] (>= (count (remove-from-preds v)) 2)) with-channels))
         one-to-many   (into {} (filter (fn [[k v]] (and (< (count (remove-from-preds v)) 2) (not (:pred? v)))) with-channels))
-        ;;;;;;;;;;;;;d;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        ;; one-to-many (linear)
+
         linear-routers (mapcat
                         (fn [[label node]]
                           (map
@@ -446,24 +436,6 @@
                                (create! linear-router)))
                            (remove (set (keys many-to-one)) (:to node))))
                         with-channels)
-        ;;_ (prn "O2M" one-to-many)
-        ;;_ (prn "M2O" many-to-one)
-
-        #_routers   #_(reduce-kv (fn [a label node]
-                                   (reduce
-                                    (fn [a to]
-                                      (let [router-name (meld-name label to)
-                                            linear-router (LinearRouter.
-                                                           router-name
-                                                           node
-                                                           (get with-channels to)
-                                                           (atom nil))]
-                                        (conj a (create! linear-router))))
-                                    a
-                                    (remove (set (keys many-to-one)) (:to node))))
-                                 [] with-channels)
-        ;;_ (prn "linea routers" linear-routers)
-        ;; many-to-ones
         merge-routers (mapcat
                        (fn [[label node]]
                          (let [merge-router (MergeRouter.
@@ -473,20 +445,6 @@
                                              (atom nil))]
                            (create! merge-router)))
                        many-to-one)
-        #_merge-routers   #_(reduce-kv (fn [a k v]
-                                         (let [merge-router (MergeRouter.
-                                                             (map (partial get with-channels)
-                                                                  (remove-from-preds v))
-                                                             (get with-channels k)
-                                                             (atom nil))
-                                               merges (create! merge-router)]
-                                           (reduce)
-                                           (assoc a
-                                                  :fuck-knows
-                                                  merges)))
-                                       {} many-to-one)
-        ;;_ (prn "merge routers" merge-routers)
-
         router-map   (reduce
                       (fn [a x]
                         (assoc a (.name x) x))
@@ -495,12 +453,12 @@
 
         _ (prn "router map" router-map)
 
-        ;; predicates
+
         pred-routers (reduce-kv (fn [a k v]
                                   (assoc a k
                                          (predicate-route workspace with-channels router-map k v)))
                                 {} predicates)
-        ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
         invokers      (reduce
                        (fn [a [k v]]
                          (assoc a k

@@ -334,7 +334,7 @@
   (testing "Loop with an internal merge"
     (is
      (=
-      '([:in2 :in3])
+      '([:in2 :b] [:in3 :c])
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
@@ -378,7 +378,7 @@
           workspace' (s/with-fn-validation (wex/build! workspace))
           result (wex/run!! workspace' {})]
       (is result)
-      (is (= [{:number 10 :foo :bar}] result)))))
+      (is (= [{:number 11 :foo :bar}] result)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
