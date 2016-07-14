@@ -26,6 +26,14 @@
 (def branch?
   #(and (vector? %) (= 3 (count %))))
 
+(defrecord Node [name
+                 outbound
+                 inbound
+                 from
+                 to
+                 target-of
+                 pred?])
+
 (s/defn workflow->long-hand-workflow
   [wf :- as/Workflow]
   (let [fnc-froms   (fn [k ws]
@@ -53,26 +61,28 @@
         with-froms  (reduce (fn [a x] (if-let [froms (fnc-froms (first x) with-leaves)]
                                         (conj a (update-in x [1] assoc :from froms))
                                         (conj a x))) [] with-leaves)]
-    (into (sorted-map) with-froms)))
+    (reduce (fn [a [k v]] (assoc a k (map->Node (assoc v :name k)))) {} with-froms)))
 
 (s/defn validate-workspace
   [{:keys [workflow contracts catalog] :as workspace} :- as/Workspace]
   (let [workflow* (set (flatten workflow))
         nodes (workflow->long-hand-workflow workflow)
-        outputs-from-parents-fn (fn [from] (mapcat (fn [x]
-                                                     (let [parent-ce          (get-catalog-entry catalog x)
-                                                           parent-contract    (get-contract workspace x)
-                                                           parent-con-outputs (set (map :witan/key
-                                                                                        (:witan/outputs parent-contract)))
-                                                           output-mappings    (map (juxt :witan/output-src-key
-                                                                                         :witan/output-dest-key)
-                                                                                   (:witan/outputs parent-ce))]
-                                                       (reduce (fn [a [from to]]
-                                                                 (-> a
-                                                                     (disj from)
-                                                                     (conj to))) parent-con-outputs
-                                                               output-mappings)))
-                                                   from))]
+        outputs-from-parents-fn
+        (fn [from]
+          (mapcat (fn [x]
+                    (let [parent-ce          (get-catalog-entry catalog x)
+                          parent-contract    (get-contract workspace x)
+                          parent-con-outputs (set (map :witan/key
+                                                       (:witan/outputs parent-contract)))
+                          output-mappings    (map (juxt :witan/output-src-key
+                                                        :witan/output-dest-key)
+                                                  (:witan/outputs parent-ce))]
+                      (reduce (fn [a [from to]]
+                                (-> a
+                                    (disj from)
+                                    (conj to))) parent-con-outputs
+                              output-mappings)))
+                  from))]
 
     ;;
     ;; Does the contract have duplicates in input or output keys?
@@ -259,13 +269,6 @@
               contracts)]
     #((kw->fn func) % (:witan/params fn-label))))
 
-(defn linear-route
-  [with-channels from to]
-  {;;:from (get-in with-channels [from :outbound :mult])
-   ;;:to   (get-in with-channels [to :inbound])
-   :pipe (async/tap (get-in with-channels [from :outbound :mult])
-                    (get-in with-channels [to :inbound]))})
-
 (defn val-key
   [m t]
   (ffirst (filter (fn [[k v]]
@@ -273,25 +276,81 @@
 
 (def vals-set (comp set vals))
 
-(defn merge-route
-  [with-channels to froms]
-  (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
-        _ (doseq [[f ch] from-chs]
-            (async/tap (get-in with-channels [f :outbound :mult]) ch))
-        merged-results (async/chan)]
-    (async/pipe merged-results (get-in with-channels [to :inbound]))
-    (async/go-loop [remaining-chs (vals-set from-chs)
-                    acc {}]
-      (let [_ (prn "Waiting for " (map (partial val-key from-chs) remaining-chs))
-            [v port] (async/alts! (vec remaining-chs))
-            _ (prn "Merging" v "into" acc)
-            acc' (merge acc v)
-            remaining-chs' (disj remaining-chs port)]
-        (if (seq remaining-chs')
-          (recur remaining-chs' acc')
-          (do
-            (async/>! merged-results acc')
-            (recur (vals-set from-chs) {})))))))
+(defn meld-name
+  [f s]
+  (keyword (str (name f) "-" (name s))))
+
+(defprotocol IRouter
+  (create!  [this])
+  (replay! [this hint])
+  (edge    [this]))
+
+(deftype LinearRouter [name ^Node from ^Node to state]
+  IRouter
+  (create!  [this]
+    (async/tap (get-in from [:outbound :mult])
+               (get-in to [:inbound]))
+    this)
+  (replay! [this hint])
+  (edge   [this]))
+
+(defn port->node
+  [port nodes]
+  (some #(when (= port (:inbound %)) %) nodes))
+
+(deftype MergeRouter [froms ^Node to state]
+  IRouter
+  (create!  [this]
+    (let [nodes (map #(map->Node
+                       {:inbound (async/chan)
+                        :name (keyword (str (name (:name %)) "_merge"))})
+                     froms)
+          linear-routers (map
+                          create!
+                          (map #(LinearRouter.
+                                 (meld-name (:name %2) (:name %1)) %1 %2 (atom nil))
+                               froms
+                               nodes))]
+      (async/go-loop [remaining-chs (set nodes)
+                      acc {}]
+        (let [;;_ (prn "Waiting for " (map :name remaining-chs))
+              [v port] (async/alts! (mapv :inbound remaining-chs))
+              node (port->node port nodes)
+              ;;_ (prn "GOT NODE" node)
+              ;;_ (prn "Merging" v "into" acc)
+              acc' (merge acc v)
+              remaining-chs' (disj remaining-chs node)]
+          (if (seq remaining-chs')
+            (recur remaining-chs' acc')
+            (do
+              ;;(prn "Outputting to" to)
+              (async/>! (:inbound to) acc')
+              (recur (set nodes) {})))))
+      linear-routers))
+  (replay! [this hint])
+  (edge   [this]))
+
+#_(defn merge-route
+    [with-channels to froms]
+    (let [from-chs (reduce #(assoc %1 %2 (async/chan)) {} froms)
+          _ (doseq [[f ch] from-chs]
+              (async/tap (get-in with-channels [f :outbound :mult]) ch))
+          merged-results (async/chan)]
+      (async/pipe merged-results (get-in with-channels [to :inbound]))
+      (async/go-loop [remaining-chs (vals-set from-chs)
+                      acc {}]
+        (let [_ (prn "Waiting for " (map (partial val-key from-chs) remaining-chs))
+              [v port] (async/alts! (vec remaining-chs))
+              _ (prn "Merging" v "into" acc)
+              acc' (merge acc v)
+              remaining-chs' (disj remaining-chs port)]
+          (if (seq remaining-chs')
+            (recur remaining-chs' acc')
+            (do
+              (async/>! merged-results acc')
+              (recur (vals-set from-chs) {})))))
+      (reduce-kv (fn [a k v]
+                   (assoc a (meld-name k to) v)) {} from-chs)))
 
 (defn gather-replay-nodes
   [with-channels loop-target pred-ky]
@@ -299,13 +358,11 @@
     (letfn [(descend [from target]
               (swap! visited conj from)
               (let [target-of-loop (get-in with-channels [target :target-of])
-                    froms
-                    (remove #{from}
-                            (remove
-                             (hash-set target-of-loop)
-                             (get-in with-channels [target :from])))
-                    _ (prn "F: " from " T: " target " FS: " froms " TOF: " target-of-loop " V: " @visited)]
-                (concat froms
+                    froms (remove #{from}
+                                  (remove
+                                   (hash-set target-of-loop)
+                                   (get-in with-channels [target :from])))]
+                (concat (mapv #(vector % target) froms)
                         (if (and target-of-loop (not= target-of-loop pred-ky))
                           (mapcat (partial descend target-of-loop)
                                   (remove #{target}
@@ -319,27 +376,24 @@
         (remove (set @visited) r)))))
 
 (defn predicate-replay
-  [workspace with-channels node pred-ky pred-fn]
+  [workspace with-channels merged-routers node pred-ky pred-fn]
   (let [loop-target (second (:to node))
         replay-nodes (gather-replay-nodes with-channels loop-target pred-ky)]
     (fn [value]
       (if (pred-fn value)
         true
-        (do
-  ;        (replay-stuff)
+        (let [router-names (map (partial apply meld-name) replay-nodes)]
+          (prn "Pred returned false. Replaying" router-names "to" loop-target (keys merged-routers))
           false)))))
 
 (defn predicate-route
-  [workspace with-channels pred-ky node]
-  (let [[pass fail] (async/split (predicate-replay workspace with-channels node pred-ky
+  [workspace with-channels merged-routers pred-ky node]
+  (let [[pass fail] (async/split (predicate-replay workspace with-channels
+                                                   merged-routers node pred-ky
                                                    (catalog-function workspace pred-ky))
                                  (get-in with-channels [pred-ky :inbound]))]
     {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
      :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
-
-(defn meld-name
-  [f s]
-  (keyword (str (name f) "-" (name s))))
 
 (defn channel
   [with-channels c]
@@ -374,26 +428,79 @@
         ingress       (ingress-nodes nodes)
         egress        (egress-nodes nodes)
         with-channels (reduce (fn [a kv] (update a (first kv) create-channel-map)) nodes nodes)
-        _ (prn nodes)
         predicates    (into {} (filter (fn [[k v]] (:pred? v)) with-channels))
         many-to-one   (into {} (filter (fn [[k v]] (>= (count (remove-from-preds v)) 2)) with-channels))
         one-to-many   (into {} (filter (fn [[k v]] (and (< (count (remove-from-preds v)) 2) (not (:pred? v)))) with-channels))
-        o2m-routers   (reduce-kv (fn [a k v]
+        ;;;;;;;;;;;;;d;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        ;; one-to-many (linear)
+        linear-routers (mapcat
+                        (fn [[label node]]
+                          (map
+                           (fn [to]
+                             (let [router-name (meld-name label to)
+                                   linear-router (LinearRouter.
+                                                  router-name
+                                                  node
+                                                  (get with-channels to)
+                                                  (atom nil))]
+                               (create! linear-router)))
+                           (remove (set (keys many-to-one)) (:to node))))
+                        with-channels)
+        ;;_ (prn "O2M" one-to-many)
+        ;;_ (prn "M2O" many-to-one)
+
+        #_routers   #_(reduce-kv (fn [a label node]
                                    (reduce
                                     (fn [a to]
-                                      (assoc a
-                                             (meld-name k to)
-                                             (linear-route with-channels k to)))
+                                      (let [router-name (meld-name label to)
+                                            linear-router (LinearRouter.
+                                                           router-name
+                                                           node
+                                                           (get with-channels to)
+                                                           (atom nil))]
+                                        (conj a (create! linear-router))))
                                     a
-                                    (remove (set (keys many-to-one)) (:to v))))
-                                 {} with-channels)
-        m20-routers   (reduce-kv (fn [a k v]
-                                   (assoc a k (merge-route with-channels k (remove-from-preds v))))
-                                 {} many-to-one)
+                                    (remove (set (keys many-to-one)) (:to node))))
+                                 [] with-channels)
+        ;;_ (prn "linea routers" linear-routers)
+        ;; many-to-ones
+        merge-routers (mapcat
+                       (fn [[label node]]
+                         (let [merge-router (MergeRouter.
+                                             (map (partial get with-channels)
+                                                  (remove-from-preds node))
+                                             (get with-channels label)
+                                             (atom nil))]
+                           (create! merge-router)))
+                       many-to-one)
+        #_merge-routers   #_(reduce-kv (fn [a k v]
+                                         (let [merge-router (MergeRouter.
+                                                             (map (partial get with-channels)
+                                                                  (remove-from-preds v))
+                                                             (get with-channels k)
+                                                             (atom nil))
+                                               merges (create! merge-router)]
+                                           (reduce)
+                                           (assoc a
+                                                  :fuck-knows
+                                                  merges)))
+                                       {} many-to-one)
+        ;;_ (prn "merge routers" merge-routers)
+
+        router-map   (reduce
+                      (fn [a x]
+                        (assoc a (.name x) x))
+                      {}
+                      (concat merge-routers linear-routers))
+
+        _ (prn "router map" router-map)
+
+        ;; predicates
         pred-routers (reduce-kv (fn [a k v]
                                   (assoc a k
-                                         (predicate-route workspace with-channels k v)))
+                                         (predicate-route workspace with-channels router-map k v)))
                                 {} predicates)
+        ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         invokers      (reduce
                        (fn [a [k v]]
                          (assoc a k

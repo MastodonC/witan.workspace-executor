@@ -272,7 +272,7 @@
 
 
 (deftest gather-replay-nodes-test
-  (testing "Tight loop detection"
+  (testing "Tightest loop detection"
     (is
      (=
       []
@@ -283,7 +283,7 @@
   (testing "Tight loop detection"
     (is
      (=
-      [:in2]
+      '([:in2 :b])
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
@@ -293,7 +293,7 @@
   (testing "Longer loop leg"
     (is
      (=
-      [:in2]
+      '([:in2 :b])
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
@@ -313,27 +313,28 @@
                                             [:c [:gte :out :a]]])
          :a :gte)))))
 
-(deftest inner-loop
+(deftest inner-outer-loop
   (let [wf (wex/workflow->long-hand-workflow
             [[:in1 :a]
              [:in2 :b]
+             [:in4 :b]
              [:a :b]
              [:b :c]
              [:in3 :c]
              [:c [:gtex :d :b]]
              [:d [:gte :out :a]]])]
     (testing "Outer loop check should not include merges of inner"
-      (is (= [:in2]
+      (is (= [[:in2 :b] [:in4 :b]]
              (wex/gather-replay-nodes wf :a :gte))))
     (testing "Inner loop check should not include merges of outer"
-      (is (= [:in3]
+      (is (= [[:in3 :c]]
              (wex/gather-replay-nodes wf :b :gtex))))))
 
 (deftest internal-merge-loop
   (testing "Loop with an internal merge"
     (is
      (=
-      [:in2 :in3]
+      '([:in2 :in3])
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
