@@ -1,6 +1,5 @@
 (ns witan.workspace-executor.core
-  (:require [manifold.deferred :as d]
-            [schema.core :as s]
+  (:require [schema.core :as s]
             [clojure.core.async :as async]
             [clojure.stacktrace :as st]
             [clojure.walk :as walk]
