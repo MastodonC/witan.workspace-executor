@@ -608,7 +608,7 @@
 
 (defn replay-nodes!
   [{:keys [routers] :as workspace-network} node-names]
-  (doseq [r (mapcat (fn [n] (filter (fn [r] (= n (.name (.to r)))) (vals routers))) node-names)]
+  (doseq [r (mapcat (fn [n] (filter (fn [r] (responsible? r n)) (vals routers))) node-names)]
     (replay! r)))
 
 (defn kill!!
