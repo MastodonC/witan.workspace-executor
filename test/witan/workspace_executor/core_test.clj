@@ -276,42 +276,42 @@
     (is
      (=
       []
-      (wex/gather-replay-nodes
+      (wex/gather-replay-edges
        (wex/workflow->long-hand-workflow [[:in :a]
                                           [:a [:gte :out :a]]])
-       :a :gte))))
+       {:name :gte :to [nil :a]}))))
   (testing "Tight loop detection"
     (is
      (=
       [[:in2 :b]]
-      (wex/gather-replay-nodes
+      (wex/gather-replay-edges
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
                                           [:a :b]
                                           [:b [:gte :out :a]]])
-       :a :gte))))
+       {:name :gte :to [nil :a]}))))
   (testing "Longer loop leg"
     (is
      (=
       [[:in2 :b]]
-      (wex/gather-replay-nodes
+      (wex/gather-replay-edges
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
                                           [:a :b]
                                           [:b :c]
                                           [:c [:gte :out :a]]])
-       :a :gte))))
+       {:name :gte :to [nil :a]}))))
   (testing "Inner loop"
-      (is
-       (=
-        [[:in2 :b]]
-        (wex/gather-replay-nodes
-         (wex/workflow->long-hand-workflow [[:in1 :a]
-                                            [:in2 :b]
-                                            [:a :b]
-                                            [:b [:gte :c :a]]
-                                            [:c [:gte :out :a]]])
-         :a :gte)))))
+    (is
+     (=
+      [[:in2 :b]]
+      (wex/gather-replay-edges
+       (wex/workflow->long-hand-workflow [[:in1 :a]
+                                          [:in2 :b]
+                                          [:a :b]
+                                          [:b [:gte :c :a]]
+                                          [:c [:gte :out :a]]])
+       {:name :gte :to [nil :a]})))))
 
 (deftest inner-outer-loop
   (let [wf (wex/workflow->long-hand-workflow
@@ -325,17 +325,17 @@
              [:d [:gte :out :a]]])]
     (testing "Outer loop check should not include merges of inner"
       (is (= [[:in2 :b] [:in4 :b]]
-             (wex/gather-replay-nodes wf :a :gte))))
+             (wex/gather-replay-edges wf   {:name :gte :to [nil :a]}))))
     (testing "Inner loop check should not include merges of outer"
       (is (= [[:in3 :c]]
-             (wex/gather-replay-nodes wf :b :gtex))))))
+             (wex/gather-replay-edges wf   {:name :gtex :to [nil :b]}))))))
 
 (deftest internal-merge-loop
   (testing "Loop with an internal merge"
     (is
      (=
       '([:in2 :b] [:in3 :c])
-      (wex/gather-replay-nodes
+      (wex/gather-replay-edges
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
                                           [:a :b]
@@ -343,7 +343,7 @@
                                           [:in3 :c]
                                           [:b :d] [:c :d]
                                           [:d [:gte :out :a]]])
-       :a :gte)))))
+         {:name :gte :to [nil :a]})))))
 
 (deftest complex-1
   (testing "Merge within a loop"
@@ -446,19 +446,20 @@
       (is result')
       (is (= [{:number 10}] result')))))
 
-(deftest forking-workflow-WIP
-  (let [workflow [[:in :a] [:a [:gte :out :out2]]]
-        catalog [{:witan/name :in
-                  :witan/fn :foo/putter
+(deftest predicate-param-replacement-with-single-replay
+  (let [workflow [[:in :a] [:a [:gte :out :a]]]
+        catalog [{:witan/name :gte
+                  :witan/fn :foo/gte
                   :witan/version "1.0"
-                  :witan/params {:number 1}}
+                  :witan/params {:threshold 10}}
                  {:witan/name :a
                   :witan/fn :foo/inc
                   :witan/version "1.0"}
+                 {:witan/name :in
+                  :witan/fn :foo/putter
+                  :witan/version "1.0"
+                  :witan/params {:number 1}}
                  {:witan/name :out
-                  :witan/fn :foo/printer
-                  :witan/version "1.0"}
-                 {:witan/name :out2
                   :witan/fn :foo/printer
                   :witan/version "1.0"}]
         workspace {:workflow  workflow
@@ -467,7 +468,21 @@
         workspace-network (s/with-fn-validation (wex/build! workspace))
         result (wex/run!! workspace-network {})]
     (is result)
-    (is (= [{:number 2}] result))))
+    (is (= [{:number 10}] result))
+    (let [workspace' (update workspace 
+                             :catalog
+                             #(cons
+                               (assoc (first %)
+                                      :witan/params                                       
+                                      {:threshold 20})
+                               (rest %)))
+          workspace-network' (wex/update-network! workspace-network workspace' [:gte])
+          _ (prn "2I: " (:invokers workspace-network'))
+          _ (wex/replay-nodes! workspace-network' [:gte])
+          result' (wex/await-results workspace-network')]
+      (is result')
+      (is (= [{:number 20}] result')))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
