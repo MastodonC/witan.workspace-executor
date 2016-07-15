@@ -446,6 +446,29 @@
       (is result')
       (is (= [{:number 10}] result')))))
 
+(deftest forking-workflow-WIP
+  (let [workflow [[:in :a] [:a [:gte :out :out2]]]
+        catalog [{:witan/name :in
+                  :witan/fn :foo/putter
+                  :witan/version "1.0"
+                  :witan/params {:number 1}}
+                 {:witan/name :a
+                  :witan/fn :foo/inc
+                  :witan/version "1.0"}
+                 {:witan/name :out
+                  :witan/fn :foo/printer
+                  :witan/version "1.0"}
+                 {:witan/name :out2
+                  :witan/fn :foo/printer
+                  :witan/version "1.0"}]
+        workspace {:workflow  workflow
+                   :catalog   catalog
+                   :contracts contracts}
+        workspace-network (s/with-fn-validation (wex/build! workspace))
+        result (wex/run!! workspace-network {})]
+    (is result)
+    (is (= [{:number 2}] result))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftest valid-workspace-tests

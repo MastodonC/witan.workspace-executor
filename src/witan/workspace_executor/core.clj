@@ -323,11 +323,11 @@
                                nodes))]
       (async/go-loop [remaining-chs (set nodes)
                       acc {}]
-        (let [_ (prn "Waiting for " (map :name remaining-chs))
+        (let [;_ (prn "Waiting for " (map :name remaining-chs))
               [v port] (async/alts! (mapv :inbound remaining-chs))
               node (port->node port nodes)
               ;;_ (prn "GOT NODE" node)
-              _ (prn "Merging" v "into" acc)
+           ;   _ (prn "Merging" v "into" acc)
               acc' (merge acc v)
               remaining-chs' (disj remaining-chs node)]
           (if (seq remaining-chs')
@@ -377,15 +377,6 @@
             (.replay! router))
           false)))))
 
-(defn predicate-route
-  [workspace with-channels merged-routers pred-ky node]
-  (let [[pass fail] (async/split (predicate-replay workspace with-channels
-                                                   merged-routers node pred-ky
-                                                   (catalog-function workspace pred-ky))
-                                 (get-in with-channels [pred-ky :inbound]))]
-    {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
-     :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
-
 (defprotocol IInvoker
   (pipe! [this])
   (kill! [this]))
@@ -401,14 +392,69 @@
   (kill! [this]
     (async/close! kill)))
 
-(defn create-invoker
-  [workspace node-name ^Node node]
-  (pipe!
-   (Invoker.
+(deftype PredicateInvoker [in out kill pred]
+  IInvoker
+  (pipe! [this]
+    (async/go-loop [[val port] (async/alts! [in kill])]
+      (when (= port in)
+        (async/>! out [(pred val) val])
+        (recur (async/alts! [in kill]))))
+    this)
+  (kill! [this]
+    (async/close! kill)))
+
+(defmulti create-invoker-of-type 
+  (fn [t _ _ _] t))
+
+(defmethod create-invoker-of-type Invoker
+  [_ workspace node-name ^Node node]
+  (Invoker.
     (:inbound node)
     (:chan (:outbound node))
     (async/chan)
-    (catalog-function workspace node-name))))
+    (catalog-function workspace node-name)))
+
+(defmethod create-invoker-of-type PredicateInvoker
+  [_ workspace node-name ^Node node]
+  (PredicateInvoker.
+    (:inbound node)
+    (:chan (:outbound node))
+    (async/chan)
+    (catalog-function workspace node-name)))
+
+(defn create-invoker
+  [workspace node-name ^Node node]
+  (pipe!
+   (create-invoker-of-type
+    Invoker
+    workspace
+    node-name
+    node)))
+
+(defn predicate-route
+  [workspace with-channels merged-routers pred-ky node]
+  (let [invoker (pipe!
+                 (create-invoker-of-type 
+                  PredicateInvoker 
+                  workspace
+                  pred-ky
+                  node))
+        tapped-pred-out (async/chan)
+        _ (async/tap (get-in with-channels [pred-ky :outbound :mult])
+                     tapped-pred-out)
+        [pass fail] (async/split (predicate-replay workspace with-channels
+                                                   merged-routers node pred-ky
+                                                   first)
+                                 tapped-pred-out)]
+    {:pass-pipe (async/pipeline 1 (get-in with-channels [(first (:to node)) :inbound]) (map second) pass)
+     :fail-pipe (async/pipeline 1 (get-in with-channels [(second (:to node)) :inbound]) (map second) fail)
+     :invoker invoker})
+  #_(let [[pass fail] (async/split (predicate-replay workspace with-channels
+                                                     merged-routers node pred-ky
+                                                     (catalog-function workspace pred-ky))
+                                   (get-in with-channels [pred-ky :inbound]))]
+      {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
+       :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
 
 (defn channel
   [with-channels c]
@@ -459,7 +505,8 @@
                                                   (atom nil))]
                                (create! linear-router)))
                            (remove (set (keys many-to-one)) (:to node))))
-                        with-channels)
+                        (remove #(:pred? (second %)) with-channels))
+        _ (prn "LR: " linear-routers)
         merge-routers (mapcat
                        (fn [[label node]]
                          (let [merge-router (MergeRouter.
