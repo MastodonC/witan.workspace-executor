@@ -552,6 +552,7 @@
                                              (atom nil))]
                            (create! merge-router)))
                        many-to-one)
+
         router-map   (reduce
                       (fn [a x]
                         (assoc a (.name x) x))
