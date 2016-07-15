@@ -100,7 +100,6 @@
    :witan/input-schema {:number s/Num}
    :witan/param-schema {:threshold s/Num}}
   [msg params]
-  (prn msg params)
   (>= (:number msg) (:threshold params)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -343,7 +342,7 @@
                                           [:in3 :c]
                                           [:b :d] [:c :d]
                                           [:d [:gte :out :a]]])
-         {:name :gte :to [nil :a]})))))
+       {:name :gte :to [nil :a]})))))
 
 (deftest complex-1
   (testing "Merge within a loop"
@@ -399,11 +398,11 @@
         result (wex/run!! workspace-network {})]
     (is result)
     (is (= [{:number 2}] result))
-    (let [workspace' (update workspace 
+    (let [workspace' (update workspace
                              :catalog
                              #(cons
                                (assoc (first %)
-                                      :witan/params                                       
+                                      :witan/params
                                       {:number 10})
                                (rest %)))
           workspace-network' (wex/update-network! workspace-network workspace' [:in])
@@ -432,11 +431,11 @@
         result (wex/run!! workspace-network {})]
     (is result)
     (is (= [{:number 2}] result))
-    (let [workspace' (update workspace 
+    (let [workspace' (update workspace
                              :catalog
                              #(cons
                                (assoc (first %)
-                                      :witan/params                                       
+                                      :witan/params
                                       {:x 10
                                        :as :number})
                                (rest %)))
@@ -469,19 +468,73 @@
         result (wex/run!! workspace-network {})]
     (is result)
     (is (= [{:number 10}] result))
-    (let [workspace' (update workspace 
+    (let [workspace' (update workspace
                              :catalog
                              #(cons
                                (assoc (first %)
-                                      :witan/params                                       
+                                      :witan/params
                                       {:threshold 20})
                                (rest %)))
           workspace-network' (wex/update-network! workspace-network workspace' [:gte])
-          _ (prn "2I: " (:invokers workspace-network'))
           _ (wex/replay-nodes! workspace-network' [:gte])
           result' (wex/await-results workspace-network')]
       (is result')
       (is (= [{:number 20}] result')))))
+
+(deftest exception-in-catalog-fn
+  (testing "Basic workflow throws exception"
+    (let [workflow [[:in :a] [:a :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:foo 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          workspace' (s/with-fn-validation (wex/build! workspace))
+          result (wex/run!! workspace' {})]
+      (is result)
+      (is (= 1 (count result)))
+      (is (contains? (first result) :error)))))
+
+(deftest exception-followed-by-a-fix
+  (testing "Basic workflow throws exception"
+    (let [workflow [[:in :a] [:a :out]]
+          catalog [{:witan/name :in
+                    :witan/fn :foo/putter
+                    :witan/version "1.0"
+                    :witan/params {:foo 1}}
+                   {:witan/name :a
+                    :witan/fn :foo/inc
+                    :witan/version "1.0"}
+                   {:witan/name :out
+                    :witan/fn :foo/printer
+                    :witan/version "1.0"}]
+          workspace {:workflow  workflow
+                     :catalog   catalog
+                     :contracts contracts}
+          workspace-network (s/with-fn-validation (wex/build! workspace))
+          result (wex/run!! workspace-network {})]
+      (is result)
+      (is (= 1 (count result)))
+      (is (contains? (first result) :error))
+      (let [workspace' (update workspace
+                               :catalog
+                               #(cons
+                                 (assoc (first %)
+                                        :witan/params
+                                        {:number 1})
+                                 (rest %)))
+            workspace-network' (wex/update-network! workspace-network workspace' [:in])
+            result' (wex/run!! workspace-network' {})]
+        (is result')
+        (is (= [{:number 2}] result'))))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
