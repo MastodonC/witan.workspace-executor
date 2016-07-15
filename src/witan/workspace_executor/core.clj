@@ -283,7 +283,7 @@
 (defprotocol IRouter
   (create!  [this])
   (replay! [this])
-  (peek [this])
+  (state [this])
   (edge    [this]))
 
 (deftype LinearRouter [name ^Node from ^Node to state]
@@ -300,7 +300,7 @@
     this)
   (replay! [this]
     (async/>!! (get-in to [:inbound]) @state))
-  (peek [this]
+  (state [this]
     @state)
   (edge   [this]))
 
@@ -338,7 +338,7 @@
               (recur (set nodes) {})))))
       linear-routers))
   (replay! [this])
-  (peek [this])
+  (state [this])
   (edge   [this]))
 
 (defn gather-replay-nodes
@@ -385,6 +385,30 @@
                                  (get-in with-channels [pred-ky :inbound]))]
     {:pass-pipe (async/pipe pass (get-in with-channels [(first (:to node)) :inbound]))
      :fail-pipe (async/pipe fail (get-in with-channels [(second (:to node)) :inbound]))}))
+
+(defprotocol IInvoker
+  (pipe! [this])
+  (kill! [this]))
+
+(deftype Invoker [in out kill func]
+  IInvoker
+  (pipe! [this]
+    (async/go-loop [[val port] (async/alts! [in kill])]
+      (when (= port in)
+        (async/>! out (func val))
+        (recur (async/alts! [in kill]))))
+    this)
+  (kill! [this]
+    (async/close! kill)))
+
+(defn create-invoker
+  [workspace node-name ^Node node]
+  (pipe!
+   (Invoker.
+    (:inbound node)
+    (:chan (:outbound node))
+    (async/chan)
+    (catalog-function workspace node-name))))
 
 (defn channel
   [with-channels c]
@@ -462,26 +486,46 @@
         invokers      (reduce
                        (fn [a [k v]]
                          (assoc a k
-                                (async/pipeline 1
-                                                (:chan (:outbound v))
-                                                (map (catalog-function workspace k))
-                                                (:inbound v))))
+                                (create-invoker workspace k v)))
                        {} (remove (comp :pred? second) with-channels))]
     {:tasks   with-channels
      :ingress ingress
-     :egress  egress}))
+     :egress  egress
+     :routers router-map
+     :invokers invokers}))
 
-(defn run!!
-  [{:keys [ingress egress tasks] :as workspace} init-data]
-  (doseq [in ingress]
-    (let [c (get-in tasks [in :inbound])]
-      (async/>!! c init-data)))
+(defn await-results
+  [{:keys [egress tasks] :as workspace-network}]
   (reduce
    (fn [a e]
      (conj a
            (async/<!! (get-in tasks [e :outbound :chan]))))
    []
    egress))
+
+(defn run!!
+  [{:keys [ingress egress tasks] :as workspace-network} init-data]
+  (doseq [in ingress]
+    (let [c (get-in tasks [in :inbound])]
+      (async/>!! c init-data)))
+  (await-results workspace-network))
+
+(defn update-network!
+  [{:keys [invokers tasks] :as workspace-network} workspace nodes-changed]
+  (doseq [invoker (map invokers nodes-changed)]
+    (kill! invoker))
+  (reduce
+   (fn [wn node-name]
+     (assoc-in wn
+                [:invokers node-name]
+                (create-invoker workspace node-name (node-name tasks))))
+   workspace-network
+   nodes-changed))
+
+(defn replay-nodes!
+  [{:keys [routers] :as workspace-network} node-names]
+  (doseq [r (mapcat (fn [n] (filter (fn [r] (= n (.name (.to r)))) (vals routers))) node-names)]
+    (replay! r)))
 
 (defn kill!!
   [{:keys [ingress egress tasks] :as workspace} init-data]

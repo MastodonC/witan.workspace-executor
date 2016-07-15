@@ -283,7 +283,7 @@
   (testing "Tight loop detection"
     (is
      (=
-      '([:in2 :b])
+      [[:in2 :b]]
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
@@ -293,7 +293,7 @@
   (testing "Longer loop leg"
     (is
      (=
-      '([:in2 :b])
+      [[:in2 :b]]
       (wex/gather-replay-nodes
        (wex/workflow->long-hand-workflow [[:in1 :a]
                                           [:in2 :b]
@@ -301,10 +301,10 @@
                                           [:b :c]
                                           [:c [:gte :out :a]]])
        :a :gte))))
-  #_(testing "Inner loop"
+  (testing "Inner loop"
       (is
        (=
-        [:in2]
+        [[:in2 :b]]
         (wex/gather-replay-nodes
          (wex/workflow->long-hand-workflow [[:in1 :a]
                                             [:in2 :b]
@@ -379,6 +379,72 @@
           result (wex/run!! workspace' {})]
       (is result)
       (is (= [{:number 11 :foo :bar}] result)))))
+
+(deftest param-replacement-needing-no-replay
+  (let [workflow [[:in :a] [:a :out]]
+        catalog [{:witan/name :in
+                  :witan/fn :foo/putter
+                  :witan/version "1.0"
+                  :witan/params {:number 1}}
+                 {:witan/name :a
+                  :witan/fn :foo/inc
+                  :witan/version "1.0"}
+                 {:witan/name :out
+                  :witan/fn :foo/printer
+                  :witan/version "1.0"}]
+        workspace {:workflow  workflow
+                   :catalog   catalog
+                   :contracts contracts}
+        workspace-network (s/with-fn-validation (wex/build! workspace))
+        result (wex/run!! workspace-network {})]
+    (is result)
+    (is (= [{:number 2}] result))
+    (let [workspace' (update workspace 
+                             :catalog
+                             #(cons
+                               (assoc (first %)
+                                      :witan/params                                       
+                                      {:number 10})
+                               (rest %)))
+          workspace-network' (wex/update-network! workspace-network workspace' [:in])
+          result' (wex/run!! workspace-network' {})]
+      (is result')
+      (is (= [{:number 11}] result')))))
+
+(deftest param-replacement-with-single-replay
+  (let [workflow [[:in :m] [:m :out]]
+        catalog [{:witan/name :m
+                  :witan/fn :foo/mulX
+                  :witan/version "1.0"
+                  :witan/params {:x 2
+                                 :as :number}}
+                 {:witan/name :in
+                  :witan/fn :foo/putter
+                  :witan/version "1.0"
+                  :witan/params {:number 1}}
+                 {:witan/name :out
+                  :witan/fn :foo/printer
+                  :witan/version "1.0"}]
+        workspace {:workflow  workflow
+                   :catalog   catalog
+                   :contracts contracts}
+        workspace-network (s/with-fn-validation (wex/build! workspace))
+        result (wex/run!! workspace-network {})]
+    (is result)
+    (is (= [{:number 2}] result))
+    (let [workspace' (update workspace 
+                             :catalog
+                             #(cons
+                               (assoc (first %)
+                                      :witan/params                                       
+                                      {:x 10
+                                       :as :number})
+                               (rest %)))
+          workspace-network' (wex/update-network! workspace-network workspace' [:m])
+          _ (wex/replay-nodes! workspace-network' [:m])
+          result' (wex/await-results workspace-network')]
+      (is result')
+      (is (= [{:number 10}] result')))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
