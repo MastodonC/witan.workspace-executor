@@ -283,16 +283,13 @@
               contracts)]
     #((kw->fn func) % (:witan/params fn-label))))
 
-(defn val-key
-  [m t]
-  (ffirst (filter (fn [[k v]]
-                    (= v t)) m)))
-
-(def vals-set (comp set vals))
-
 (defn meld-name
   [f s]
   (keyword (str (name f) "-" (name s))))
+
+(defn meld-merge-name
+  [node]
+  (keyword (str "merge-of-" (apply str (interpose "-and-" (map name (:from node)))) "-to-" (name (:name node)))))
 
 (defprotocol IActivatable
   (activate! [this]))
@@ -351,7 +348,6 @@
     label)
   (responsible? [this node-name]))
 
-
 (defn gather-replay-edges
   [with-channels node]
   (let [loop-target (second (:to node))
@@ -390,6 +386,26 @@
           (.replay! router))
         false))))
 
+(deftype PredicateRouter [label tos pred-node pred-replay-fn replay-routers]
+  IActivatable
+  (activate!  [this]
+    (let [tapped-pred-out (async/chan)     
+          [pass fail] (async/split pred-replay-fn
+                                   tapped-pred-out)]
+      (async/tap (get-in pred-node [:outbound :mult])
+                 tapped-pred-out)
+      (async/pipeline 1 (:inbound (first tos)) (map second) pass)
+      (async/pipeline 1 (:inbound (second tos)) (map second) fail)))
+  IRouter
+  (replay! [this]
+    (doseq [r replay-routers]
+      (.replay! r)))
+  (state [this])
+  (label [this]
+    label)
+  (responsible? [this node-name]
+    (= node-name (:name pred-node))))
+
 (defprotocol IInvoker
   (kill! [this]))
 
@@ -427,36 +443,6 @@
   (kill! [this]
     (async/close! kill)))
 
-(deftype PredicateRouter [label tos pred-node pred-replay-fn replay-routers]
-  IActivatable
-  (activate!  [this]
-    (let [tapped-pred-out (async/chan)     
-          [pass fail] (async/split pred-replay-fn
-                                   tapped-pred-out)]
-      (async/tap (get-in pred-node [:outbound :mult])
-                 tapped-pred-out)
-      (async/pipeline 1 (:inbound (first tos)) (map second) pass)
-      (async/pipeline 1 (:inbound (second tos)) (map second) fail)))
-  IRouter
-  (replay! [this]
-    (doseq [r replay-routers]
-      (.replay! r)))
-  (state [this])
-  (label [this]
-    label)
-  (responsible? [this node-name]
-    (= node-name (:name pred-node))))
-
-(defn channel
-  [with-channels c]
-  (select*
-   [(spec/walker c) c]
-   with-channels))
-
-(defn remove-from-preds
-  [node]
-  (remove (hash-set (:target-of node)) (:from node)))
-
 (defmulti create-router
   "Returns a vector router connecting node to :from nodes"
   (fn [name->node node] (:type node)))
@@ -478,10 +464,6 @@
      from-node
      node
      (atom nil))))
-
-(defn meld-merge-name
-  [node]
-  (keyword (str "merge-of-" (apply str (interpose "-and-" (map name (:from node)))) "-to-" (name (:name node)))))
 
 (defmethod create-router :from-many
   [name->node node]
@@ -540,7 +522,7 @@
 
 (def map-flat (comp flatten keep))
 
-(defn activate-all
+(defn activate-all!
   [activatables]
   (doseq [a activatables]
     (activate! a)))
@@ -570,7 +552,7 @@
                          (create-invoker n (catalog-function workspace (:name n))))
                        nodes)
 
-        _ (activate-all (concat predicate-routers routers invokers))]
+        _ (activate-all! (concat predicate-routers routers invokers))]
     {:tasks    name->node
      :ingress  ingress
      :egress   egress
