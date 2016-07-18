@@ -283,27 +283,26 @@
               contracts)]
     #((kw->fn func) % (:witan/params fn-label))))
 
-(defn val-key
-  [m t]
-  (ffirst (filter (fn [[k v]]
-                    (= v t)) m)))
-
-(def vals-set (comp set vals))
-
 (defn meld-name
   [f s]
   (keyword (str (name f) "-" (name s))))
 
-(defprotocol IRouter
-  (create!  [this])
-  (replay! [this])
-  (state [this])
-  (responsible? [this node-name])
-  (edge    [this]))
+(defn meld-merge-name
+  [node]
+  (keyword (str "merge-of-" (apply str (interpose "-and-" (map name (:from node)))) "-to-" (name (:name node)))))
 
-(deftype LinearRouter [name ^Node from ^Node to state]
-  IRouter
-  (create!  [this]
+(defprotocol IActivatable
+  (activate! [this]))
+
+(defprotocol IRouter
+  (replay! [this])
+  (responsible? [this node-name])
+  (label [this])
+  (state [this]))
+
+(deftype LinearRouter [label ^Node from ^Node to state]
+  IActivatable
+  (activate!  [this]
     (async/tap (get-in from [:outbound :mult])
                (get-in to [:inbound]))
     (let [storage-chan (async/chan)]
@@ -313,52 +312,41 @@
         (reset! state store)
         (recur (async/<! storage-chan))))
     this)
+  IRouter  
   (replay! [this]
     (async/>!! (get-in to [:inbound]) @state))
   (state [this]
     @state)
+  (label [this]
+    label)
   (responsible? [this node-name]
-    (= node-name (:name to)))
-  (edge   [this]))
+    (= node-name (:name to))))
 
 (defn port->node
   [port nodes]
   (some #(when (= port (:inbound %)) %) nodes))
 
-(deftype MergeRouter [froms ^Node to state]
+(deftype MergeRouter [label from-routers merge-nodes ^Node to]
+  IActivatable
+  (activate!  [this]
+    (async/go-loop [remaining-chs (set merge-nodes)
+                    acc {}]
+      (let [[v port] (async/alts! (mapv :inbound remaining-chs))
+            node (port->node port merge-nodes)              
+            acc' (merge acc v)
+            remaining-chs' (disj remaining-chs node)]
+        (if (seq remaining-chs')
+          (recur remaining-chs' acc')
+          (do
+            ;;(prn "Outputting to" to)
+            (async/>! (:inbound to) acc')
+            (recur (set merge-nodes) {}))))))
   IRouter
-  (create!  [this]
-    (let [nodes (map #(map->Node
-                       {:inbound (async/chan)
-                        :name (keyword (str (name (:name %)) "_merge"))})
-                     froms)
-          linear-routers (map
-                          create!
-                          (map #(LinearRouter.
-                                 (meld-name (:name %1) (:name to)) %1 %2 (atom nil))
-                               froms
-                               nodes))]
-      (async/go-loop [remaining-chs (set nodes)
-                      acc {}]
-        (let [;_ (prn "Waiting for " (map :name remaining-chs))
-              [v port] (async/alts! (mapv :inbound remaining-chs))
-              node (port->node port nodes)
-              ;;_ (prn "GOT NODE" node)
-                                        ;   _ (prn "Merging" v "into" acc)
-              acc' (merge acc v)
-              remaining-chs' (disj remaining-chs node)]
-          (if (seq remaining-chs')
-            (recur remaining-chs' acc')
-            (do
-              ;;(prn "Outputting to" to)
-              (async/>! (:inbound to) acc')
-              (recur (set nodes) {})))))
-      linear-routers))
   (replay! [this])
   (state [this])
-  (responsible? [this node-name])
-  (edge   [this]))
-
+  (label [this]
+    label)
+  (responsible? [this node-name]))
 
 (defn gather-replay-edges
   [with-channels node]
@@ -398,13 +386,32 @@
           (.replay! router))
         false))))
 
+(deftype PredicateRouter [label tos pred-node pred-replay-fn replay-routers]
+  IActivatable
+  (activate!  [this]
+    (let [tapped-pred-out (async/chan)     
+          [pass fail] (async/split pred-replay-fn
+                                   tapped-pred-out)]
+      (async/tap (get-in pred-node [:outbound :mult])
+                 tapped-pred-out)
+      (async/pipeline 1 (:inbound (first tos)) (map second) pass)
+      (async/pipeline 1 (:inbound (second tos)) (map second) fail)))
+  IRouter
+  (replay! [this]
+    (doseq [r replay-routers]
+      (.replay! r)))
+  (state [this])
+  (label [this]
+    label)
+  (responsible? [this node-name]
+    (= node-name (:name pred-node))))
+
 (defprotocol IInvoker
-  (pipe! [this])
   (kill! [this]))
 
 (deftype Invoker [node kill func]
-  IInvoker
-  (pipe! [this]
+  IActivatable
+  (activate! [this]
     (let [in       (:inbound node)
           out      (get-in node [:outbound :chan])
           error-ch (:error-ch node)]
@@ -414,14 +421,14 @@
             (async/>! out (func val))
             (catch Exception e
               (async/>! error-ch e)))
-          (recur (async/alts! [in kill])))))
-    this)
+          (recur (async/alts! [in kill]))))))
+  IInvoker
   (kill! [this]
     (async/close! kill)))
 
 (deftype PredicateInvoker [node kill pred]
-  IInvoker
-  (pipe! [this]
+  IActivatable
+  (activate! [this]
     (let [in       (:inbound node)
           out      (get-in node [:outbound :chan])
           error-ch (:error-ch node)]
@@ -431,65 +438,10 @@
             (async/>! out [(pred val) val])
             (catch Exception e
               (async/>! error-ch e)))
-          (recur (async/alts! [in kill])))))
-    this)
+          (recur (async/alts! [in kill]))))))
+  IInvoker
   (kill! [this]
     (async/close! kill)))
-
-(defmulti create-invoker-of-type
-  (fn [t _ _ _] t))
-
-(defmethod create-invoker-of-type Invoker
-  [_ workspace node-name ^Node node]
-  (Invoker.
-   node
-   (async/chan)
-   (catalog-function workspace node-name)))
-
-(defmethod create-invoker-of-type PredicateInvoker
-  [_ workspace node-name ^Node node]
-  (PredicateInvoker.
-   node
-   (async/chan)
-   (catalog-function workspace node-name)))
-
-#_(defn create-invoker
-  [workspace node-name ^Node node]
-  (pipe!
-   (create-invoker-of-type
-    Invoker
-    workspace
-    node-name
-    node)))
-
-(deftype PredicateRouter [name tos pred-node pred-replay-fn replay-routers]
-  IRouter
-  (create!  [this]
-    (let [tapped-pred-out (async/chan)
-          _ (async/tap (get-in pred-node [:outbound :mult])
-                       tapped-pred-out)
-          [pass fail] (async/split pred-replay-fn
-                                   tapped-pred-out)
-          _ (async/pipeline 1 (:inbound (first tos)) (map second) pass)
-          _ (async/pipeline 1 (:inbound (second tos)) (map second) fail)]
-      this))
-  (replay! [this]
-    (doseq [r replay-routers]
-      (.replay! r)))
-  (state [this])
-  (responsible? [this node-name]
-    (= node-name (:name pred-node)))
-  (edge    [this]))
-
-(defn channel
-  [with-channels c]
-  (select*
-   [(spec/walker c) c]
-   with-channels))
-
-(defn remove-from-preds
-  [node]
-  (remove (hash-set (:target-of node)) (:from node)))
 
 (defmulti create-router
   "Returns a vector router connecting node to :from nodes"
@@ -498,33 +450,36 @@
 (defmethod create-router :from-one
   [name->node node]
   (let [from-node ((first (:from node)) name->node)]
-    [(.create!
-      (LinearRouter.
-       (meld-name (:name from-node) (:name node))
-       from-node
-       node
-       (atom nil)))]))
+    (LinearRouter.
+     (meld-name (:name from-node) (:name node))
+     from-node
+     node
+     (atom nil))))
 
 (defmethod create-router :sink
   [name->node node]
   (when-let [from-node (get name->node (first (:from node [])))]
-    [(.create!
-      (LinearRouter.
-       (meld-name (:name from-node) (:name node))
-       from-node
-       node
-       (atom nil)))]))
+    (LinearRouter.
+     (meld-name (:name from-node) (:name node))
+     from-node
+     node
+     (atom nil))))
 
 (defmethod create-router :from-many
   [name->node node]
-  ;move the linear router creation into here i reckon, can bin off the protocol then i reckon.
-  (.create!
-   (MergeRouter.
-    (map 
-     #(get name->node %)
-     (:from node))
-    node
-    (atom nil))))
+  (let [from-nodes (map 
+                    #(get name->node %)
+                    (:from node))
+        merge-nodes (map #(map->Node
+                     {:inbound (async/chan)
+                      :name (keyword (str (name (:name %)) "_merge"))})
+                   from-nodes)
+        linear-routers (map #(LinearRouter.
+                              (meld-name (:name %1) (:name node)) %1 %2 (atom nil))
+                            from-nodes
+                            merge-nodes)]
+    (cons (MergeRouter. (meld-merge-name node) linear-routers merge-nodes node)
+          linear-routers)))
 
 (defn create-predicate-router
   [name->node edge-name->router node]
@@ -532,44 +487,45 @@
                             (gather-replay-edges name->node node))
         pred-replay-fn (predicate-replay replay-routers)
         from-node (get name->node (first (:from node)))]
-    [(.create!
-       (LinearRouter.
-        (meld-name (:name from-node) (:name node))
-        from-node
-        node
-        (atom nil)))
-     (.create!
-      (PredicateRouter.
-       (:name node)
-       (map (partial get name->node) (:to node))
-       node
-       pred-replay-fn
-       replay-routers))]))
+    [(LinearRouter.
+      (meld-name (:name from-node) (:name node))
+      from-node
+      node
+      (atom nil))
+     (PredicateRouter.
+      (:name node)
+      (map (partial get name->node) (:to node))
+      node
+      pred-replay-fn
+      replay-routers)]))
 
 (defmulti create-invoker 
-  (fn [workspace ^Node node] (:type node)))
+  (fn [^Node node func] (:type node)))
 
 (defmethod create-invoker :predicate
-  [workspace ^Node node]
-  (pipe!
-   (create-invoker-of-type
-    PredicateInvoker
-    workspace
-    (:name node)
-    node)))
+  [^Node node func]
+  (PredicateInvoker.
+   node
+   (async/chan)
+   func))
 
 (defmethod create-invoker :default
-  [workspace ^Node node]
-  (pipe!
-   (create-invoker-of-type
-    Invoker
-    workspace
-    (:name node)
-    node)))
+  [^Node node func]
+  (Invoker.
+   node
+   (async/chan)
+   func))
 
 (defn reduce-nodes-to-map-name->node
   [nodes]
   (reduce (fn [a n] (assoc a (:name n) n)) {} nodes))
+
+(def map-flat (comp flatten keep))
+
+(defn activate-all!
+  [activatables]
+  (doseq [a activatables]
+    (activate! a)))
 
 (s/defn build!
   [{:keys [workflow] :as workspace} :- as/Workspace]
@@ -581,25 +537,27 @@
         egress        (filter (=node-type :sink) nodes)
         name->node    (reduce-nodes-to-map-name->node nodes)
         
-        routers (mapcat (partial create-router name->node) 
-                        (remove (=node-type :source) 
-                                (remove (=node-type :predicate)
-                                        nodes)))
+        routers (map-flat (partial create-router name->node) 
+                          (remove (=node-type :source) 
+                                  (remove (=node-type :predicate)
+                                          nodes)))
 
-        edge-name->router (reduce (fn [a r] (assoc a (.name r) r)) {} routers)
+        edge-name->router (reduce (fn [a r] (assoc a (label r) r)) {} routers)
         predicate-routers (mapcat 
                            (partial create-predicate-router name->node edge-name->router)
                            (filter (=node-type :predicate) nodes))
 
         invokers      (map
                        (fn [n]
-                         (create-invoker workspace n))
-                       nodes)]
+                         (create-invoker n (catalog-function workspace (:name n))))
+                       nodes)
+
+        _ (activate-all! (concat predicate-routers routers invokers))]
     {:tasks    name->node
      :ingress  ingress
      :egress   egress
      :routers  (reduce 
-                #(assoc %1 (.name %2) %2) edge-name->router predicate-routers)
+                #(assoc %1 (label %2) %2) edge-name->router predicate-routers)
      :invokers (reduce #(assoc %1 (:name (.node %2)) %2) {} invokers)
      :error-ch error-channel}))
 
@@ -627,9 +585,9 @@
     (kill! invoker))
   (reduce
    (fn [wn node-name]
-     (update-in wn
+     (assoc-in wn
                 [:invokers node-name]
-                #(pipe! (create-invoker-of-type (type %) workspace node-name (node-name tasks)))))
+                (activate! (create-invoker (tasks node-name) (catalog-function workspace node-name)))))
    workspace-network
    nodes-changed))
 
