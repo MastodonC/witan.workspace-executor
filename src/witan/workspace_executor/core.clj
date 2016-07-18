@@ -474,7 +474,6 @@
           _ (async/pipeline 1 (:inbound (second tos)) (map second) fail)]
       this))
   (replay! [this]
-    (prn "RR: " replay-routers)
     (doseq [r replay-routers]
       (.replay! r)))
   (state [this])
@@ -637,7 +636,6 @@
 (defn replay-nodes!
   [{:keys [routers] :as workspace-network} node-names]
   (doseq [r (mapcat (fn [n] (filter (fn [r] (responsible? r n)) (vals routers))) node-names)]
-    (prn "R: " r)
     (replay! r)))
 
 (defn kill!!
