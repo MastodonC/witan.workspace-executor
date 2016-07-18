@@ -34,10 +34,28 @@
                  pred?
                  error-ch])
 
+(def one? (partial = 1))
+(def <one? (partial < 1))
+
+(defn node-type
+  [node]
+  (let [from-count (count (:from node))]
+    (cond
+      (:pred? node) :predicate
+      (zero? (count (:to node))) :sink
+      (one? from-count) :from-one
+      (<one? from-count) :from-many
+      (zero? from-count) :source)))
+
+(defn predicate-are-target-of
+  [target-of [label _]]
+  (= target-of label))
+
 (s/defn workflow->long-hand-workflow
   [wf :- as/Workflow]
   (let [fnc-froms   (fn [k ws]
                       (->> ws
+                           (remove (partial predicate-are-target-of ((comp :target-of k) ws)))
                            (filter (fn [y] (some #{k} (-> y (second) :to))))
                            (reduce (fn [a c] (conj a (first c))) [])
                            (not-empty)))
@@ -55,13 +73,16 @@
                                           (-> a
                                               (assoc-in [pred :to] (vec (concat (get-in a [pred :to] []) [break loop])))
                                               (assoc-in [pred :pred?] true)
-                                              (assoc-in [loop :target-of] pred))) with-to))
+                                              (assoc-in [loop :target-of] pred)
+                                              (assoc-in [break :target-of] pred))) with-to))
         with-leaves (->> (set (flatten wf))
                          (reduce (fn [a c] (if (contains? a c) a (conj a (hash-map c {})))) (into {} with-to-with-preds)))
+
         with-froms  (reduce (fn [a x] (if-let [froms (fnc-froms (first x) with-leaves)]
                                         (conj a (update-in x [1] assoc :from froms))
                                         (conj a x))) [] with-leaves)]
-    (reduce (fn [a [k v]] (assoc a k (map->Node (assoc v :name k)))) {} with-froms)))
+
+    (mapv (fn [[k v]] (map->Node (assoc v :name k :type (node-type v)))) with-froms)))
 
 (s/defn validate-workspace
   [{:keys [workflow contracts catalog] :as workspace} :- as/Workspace]
@@ -217,29 +238,21 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn egress-node
-  [node]
-  (and
-   (empty? (:to node))
-   (:from node)))
-
-(defn ingress-node
-  [node]
-  (and
-   (:to node)
-   (empty? (:from node))))
-
 (defn chan-pair
   []
   (let [c (async/chan 10)]
     {:chan c
      :mult (async/mult c)}))
 
+(defn =node-type
+  [nt]
+  #(= nt (:type %)))
+
 (defn create-channel-map
   [error-ch node]
   (-> node
       (assoc :inbound  (async/chan))
-      (assoc :outbound (if (egress-node node)
+      (assoc :outbound (if ((=node-type :sink) node)
                          {:chan (async/chan)}
                          (chan-pair)))
       (assoc :error-ch error-ch)))
@@ -353,19 +366,17 @@
         pred-ky (:name node)
         visited (atom [])]
     (letfn [(descend [from target]
-              (swap! visited conj from)
+              (swap! visited conj from target)
               (let [target-of-loop (get-in with-channels [target :target-of])
                     froms (remove #{from}
-                                  (remove
-                                   (hash-set target-of-loop)
-                                   (get-in with-channels [target :from])))]
+                                  (get-in with-channels [target :from]))]
                 (concat (mapv #(vector % target) froms)
                         (if (and target-of-loop (not= target-of-loop pred-ky))
                           (mapcat (partial descend target-of-loop)
-                                  (remove #{target}
+                                  (remove (set @visited)
                                           (get-in with-channels [target-of-loop :to])))
                           (mapcat (partial descend target)
-                                  (remove #{pred-ky}
+                                  (remove (conj (set @visited) pred-ky)
                                           (get-in with-channels [target :to])))))))]
       (let [r (mapcat (partial descend loop-target)
                       (remove #{pred-ky}
@@ -442,7 +453,7 @@
    (async/chan)
    (catalog-function workspace node-name)))
 
-(defn create-invoker
+#_(defn create-invoker
   [workspace node-name ^Node node]
   (pipe!
    (create-invoker-of-type
@@ -451,7 +462,7 @@
     node-name
     node)))
 
-(deftype PredicateRouter [tos pred-node pred-replay-fn replay-routers]
+(deftype PredicateRouter [name tos pred-node pred-replay-fn replay-routers]
   IRouter
   (create!  [this]
     (let [tapped-pred-out (async/chan)
@@ -463,32 +474,13 @@
           _ (async/pipeline 1 (:inbound (second tos)) (map second) fail)]
       this))
   (replay! [this]
+    (prn "RR: " replay-routers)
     (doseq [r replay-routers]
       (.replay! r)))
   (state [this])
   (responsible? [this node-name]
-    (= node-name (:name (second tos))))
+    (= node-name (:name pred-node)))
   (edge    [this]))
-
-(defn predicate-route
-  [workspace with-channels merged-routers pred-ky node]
-  (let [invoker (pipe!
-                 (create-invoker-of-type
-                  PredicateInvoker
-                  workspace
-                  pred-ky
-                  node))
-        replay-routers (map (partial edge->router merged-routers) (gather-replay-edges with-channels node))
-        pred-replay-fn (predicate-replay replay-routers)
-        router (create!
-                (PredicateRouter.
-                 (map with-channels (:to node))
-                 node
-                 pred-replay-fn
-                 replay-routers))]
-    {:pred-ky pred-ky
-     :router router
-     :invoker invoker}))
 
 (defn channel
   [with-channels c]
@@ -496,95 +488,125 @@
    [(spec/walker c) c]
    with-channels))
 
-(defn ingress-nodes
-  [nodes]
-  (map first
-       (filter
-        (fn [[k v]]
-          (ingress-node v))
-        nodes)))
-
-(defn egress-nodes
-  [nodes]
-  (map first
-       (filter
-        (fn [[k v]]
-          (egress-node v))
-        nodes)))
-
 (defn remove-from-preds
   [node]
   (remove (hash-set (:target-of node)) (:from node)))
+
+(defmulti create-router
+  "Returns a vector router connecting node to :from nodes"
+  (fn [name->node node] (:type node)))
+
+(defmethod create-router :from-one
+  [name->node node]
+  (let [from-node ((first (:from node)) name->node)]
+    [(.create!
+      (LinearRouter.
+       (meld-name (:name from-node) (:name node))
+       from-node
+       node
+       (atom nil)))]))
+
+(defmethod create-router :sink
+  [name->node node]
+  (when-let [from-node (get name->node (first (:from node [])))]
+    [(.create!
+      (LinearRouter.
+       (meld-name (:name from-node) (:name node))
+       from-node
+       node
+       (atom nil)))]))
+
+(defmethod create-router :from-many
+  [name->node node]
+  ;move the linear router creation into here i reckon, can bin off the protocol then i reckon.
+  (.create!
+   (MergeRouter.
+    (map 
+     #(get name->node %)
+     (:from node))
+    node
+    (atom nil))))
+
+(defn create-predicate-router
+  [name->node edge-name->router node]
+  (let [replay-routers (map (partial edge->router edge-name->router) 
+                            (gather-replay-edges name->node node))
+        pred-replay-fn (predicate-replay replay-routers)
+        from-node (get name->node (first (:from node)))]
+    [(.create!
+       (LinearRouter.
+        (meld-name (:name from-node) (:name node))
+        from-node
+        node
+        (atom nil)))
+     (.create!
+      (PredicateRouter.
+       (:name node)
+       (map (partial get name->node) (:to node))
+       node
+       pred-replay-fn
+       replay-routers))]))
+
+(defmulti create-invoker 
+  (fn [workspace ^Node node] (:type node)))
+
+(defmethod create-invoker :predicate
+  [workspace ^Node node]
+  (pipe!
+   (create-invoker-of-type
+    PredicateInvoker
+    workspace
+    (:name node)
+    node)))
+
+(defmethod create-invoker :default
+  [workspace ^Node node]
+  (pipe!
+   (create-invoker-of-type
+    Invoker
+    workspace
+    (:name node)
+    node)))
+
+(defn reduce-nodes-to-map-name->node
+  [nodes]
+  (reduce (fn [a n] (assoc a (:name n) n)) {} nodes))
 
 (s/defn build!
   [{:keys [workflow] :as workspace} :- as/Workspace]
   #_(validate-workspace workspace)
   (let [error-channel (async/chan)
-        nodes         (workflow->long-hand-workflow workflow)
-        ingress       (ingress-nodes nodes)
-        egress        (egress-nodes nodes)
-        with-channels (reduce (fn [a kv] (update a (first kv) (partial create-channel-map error-channel))) nodes nodes)
-        predicates    (into {} (filter (fn [[k v]] (:pred? v)) with-channels))
-        many-to-one   (into {} (filter (fn [[k v]] (>= (count (remove-from-preds v)) 2)) with-channels))
-        one-to-many   (into {} (filter (fn [[k v]] (and (< (count (remove-from-preds v)) 2) (not (:pred? v)))) with-channels))
+        nodes         (mapv (partial create-channel-map error-channel) 
+                            (workflow->long-hand-workflow workflow))
+        ingress       (filter (=node-type :source) nodes)
+        egress        (filter (=node-type :sink) nodes)
+        name->node    (reduce-nodes-to-map-name->node nodes)
+        
+        routers (mapcat (partial create-router name->node) 
+                        (remove (=node-type :source) 
+                                (remove (=node-type :predicate)
+                                        nodes)))
 
-        linear-routers (mapcat
-                        (fn [[label node]]
-                          (map
-                           (fn [to]
-                             (let [router-name (meld-name label to)
-                                   linear-router (LinearRouter.
-                                                  router-name
-                                                  node
-                                                  (get with-channels to)
-                                                  (atom nil))]
-                               (create! linear-router)))
-                           (remove (set (keys many-to-one)) (:to node))))
-                        (remove #(:pred? (second %)) with-channels))
+        edge-name->router (reduce (fn [a r] (assoc a (.name r) r)) {} routers)
+        predicate-routers (mapcat 
+                           (partial create-predicate-router name->node edge-name->router)
+                           (filter (=node-type :predicate) nodes))
 
-        merge-routers (mapcat
-                       (fn [[label node]]
-                         (let [merge-router (MergeRouter.
-                                             (map (partial get with-channels)
-                                                  (remove-from-preds node))
-                                             (get with-channels label)
-                                             (atom nil))]
-                           (create! merge-router)))
-                       many-to-one)
-
-        router-map   (reduce
-                      (fn [a x]
-                        (assoc a (.name x) x))
-                      {}
-                      (concat merge-routers linear-routers))
-
-        pred-ris (map (fn [[k v]]
-                        (predicate-route workspace with-channels router-map k v))
-                      predicates)
-
-        [predicate-routers predicate-invokers] (reduce (fn [[rs is] ri]
-                                                         [(assoc rs (:pred-ky ri) (:router ri))
-                                                          (assoc is (:pred-ky ri) (:invoker ri))])
-                                                       [{} {}] pred-ris)
-
-        all-router-map (merge predicate-routers router-map)
-
-        invokers      (reduce
-                       (fn [a [k v]]
-                         (assoc a k
-                                (create-invoker workspace k v)))
-                       predicate-invokers
-                       (remove (comp :pred? second) with-channels))]
-    {:tasks    with-channels
+        invokers      (map
+                       (fn [n]
+                         (create-invoker workspace n))
+                       nodes)]
+    {:tasks    name->node
      :ingress  ingress
      :egress   egress
-     :routers  all-router-map
-     :invokers invokers
+     :routers  (reduce 
+                #(assoc %1 (.name %2) %2) edge-name->router predicate-routers)
+     :invokers (reduce #(assoc %1 (:name (.node %2)) %2) {} invokers)
      :error-ch error-channel}))
 
 (defn await-results
   [{:keys [egress tasks error-ch] :as workspace-network}]
-  (loop [remaining-chs (set (map #(get-in tasks [% :outbound :chan]) egress))
+  (loop [remaining-chs (set (map #(get-in % [:outbound :chan]) egress))
          acc-results []]
     (if (seq remaining-chs)
       (let [[v p] (async/alts!! (cons error-ch remaining-chs))]
@@ -596,7 +618,7 @@
 (defn run!!
   [{:keys [ingress egress tasks] :as workspace-network} init-data]
   (doseq [in ingress]
-    (let [c (get-in tasks [in :inbound])]
+    (let [c (get in :inbound)]
       (async/>!! c init-data)))
   (await-results workspace-network))
 
@@ -615,6 +637,7 @@
 (defn replay-nodes!
   [{:keys [routers] :as workspace-network} node-names]
   (doseq [r (mapcat (fn [n] (filter (fn [r] (responsible? r n)) (vals routers))) node-names)]
+    (prn "R: " r)
     (replay! r)))
 
 (defn kill!!

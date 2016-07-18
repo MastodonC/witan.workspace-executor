@@ -140,6 +140,116 @@
     :witan/impl :witan.workspace-executor.core-test/msg-spitter
     :witan/version "1.0"}])
 
+(deftest workflow->long-hand-workflow
+  (testing "Simple workflow"
+    (is
+     (= [(wex/map->Node {:name :in,
+                          :outbound nil,
+                          :inbound nil,
+                          :from nil,
+                          :to [:a],
+                          :target-of nil,
+                          :pred? nil,
+                          :error-ch nil
+                         :type :source}),
+         (wex/map->Node {:name :a,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:in],
+                         :to [:out],
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :from-one}),
+         (wex/map->Node {:name :out,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:a],
+                         :to nil,
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :sink})]
+        (wex/workflow->long-hand-workflow [[:in :a] [:a :out]]))))
+  (testing "Merge workflow"
+    (is
+     (= [(wex/map->Node {:name :in,
+                          :outbound nil,
+                          :inbound nil,
+                          :from nil,
+                          :to [:a],
+                          :target-of nil,
+                          :pred? nil,
+                          :error-ch nil
+                         :type :source})
+         (wex/map->Node {:name :in2,
+                         :outbound nil,
+                         :inbound nil,
+                         :from nil,
+                         :to [:a],
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :source}),
+         (wex/map->Node {:name :a,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:in :in2],
+                         :to [:out],
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :from-many}),
+         (wex/map->Node {:name :out,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:a],
+                         :to nil,
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :sink})]
+        (wex/workflow->long-hand-workflow [[:in :a] [:in2 :a] [:a :out]]))))
+  (testing "Predicate workflow"
+    (is
+     (= [(wex/map->Node {:name :in,
+                          :outbound nil,
+                          :inbound nil,
+                          :from nil,
+                          :to [:a],
+                          :target-of nil,
+                          :pred? nil,
+                          :error-ch nil
+                         :type :source}),
+         (wex/map->Node {:name :a,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:in],
+                         :to [:gte],
+                         :target-of :gte
+                         :pred? nil,
+                         :error-ch nil
+                         :type :from-one})
+         (wex/map->Node {:name :gte,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:a],
+                         :to [:out :a],
+                         :target-of nil,
+                         :pred? true
+                         :error-ch nil
+                         :type :predicate}),
+         (wex/map->Node {:name :out,
+                         :outbound nil,
+                         :inbound nil,
+                         :from nil
+                         :to nil,
+                         :target-of :gte
+                         :pred? nil,
+                         :error-ch nil
+                         :type :sink})]
+        (wex/workflow->long-hand-workflow [[:in :a] [:a [:gte :out :a]]])))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (deftest linear-one-step
@@ -284,44 +394,48 @@
      (=
       [[:in2 :b]]
       (wex/gather-replay-edges
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b [:gte :out :a]]])
+       (wex/reduce-nodes-to-map-name->node
+               (wex/workflow->long-hand-workflow [[:in1 :a]
+                                                  [:in2 :b]
+                                                  [:a :b]
+                                                  [:b [:gte :out :a]]]))
        {:name :gte :to [nil :a]}))))
   (testing "Longer loop leg"
     (is
      (=
       [[:in2 :b]]
       (wex/gather-replay-edges
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b :c]
-                                          [:c [:gte :out :a]]])
+       (wex/reduce-nodes-to-map-name->node
+               (wex/workflow->long-hand-workflow [[:in1 :a]
+                                                  [:in2 :b]
+                                                  [:a :b]
+                                                  [:b :c]
+                                                  [:c [:gte :out :a]]]))
        {:name :gte :to [nil :a]}))))
   (testing "Inner loop"
     (is
      (=
       [[:in2 :b]]
       (wex/gather-replay-edges
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b [:gte :c :a]]
-                                          [:c [:gte :out :a]]])
+       (wex/reduce-nodes-to-map-name->node
+        (wex/workflow->long-hand-workflow [[:in1 :a]
+                                           [:in2 :b]
+                                           [:a :b]
+                                           [:b [:gte :c :a]]
+                                           [:c [:gte :out :a]]]))
        {:name :gte :to [nil :a]})))))
 
 (deftest inner-outer-loop
-  (let [wf (wex/workflow->long-hand-workflow
-            [[:in1 :a]
-             [:in2 :b]
-             [:in4 :b]
-             [:a :b]
-             [:b :c]
-             [:in3 :c]
-             [:c [:gtex :d :b]]
-             [:d [:gte :out :a]]])]
+  (let [wf (wex/reduce-nodes-to-map-name->node
+            (wex/workflow->long-hand-workflow
+             [[:in1 :a]
+              [:in2 :b]
+              [:in4 :b]
+              [:a :b]
+              [:b :c]
+              [:in3 :c]
+              [:c [:gtex :d :b]]
+              [:d [:gte :out :a]]]))]
     (testing "Outer loop check should not include merges of inner"
       (is (= [[:in2 :b] [:in4 :b]]
              (wex/gather-replay-edges wf   {:name :gte :to [nil :a]}))))
@@ -335,13 +449,14 @@
      (=
       '([:in2 :b] [:in3 :c])
       (wex/gather-replay-edges
-       (wex/workflow->long-hand-workflow [[:in1 :a]
-                                          [:in2 :b]
-                                          [:a :b]
-                                          [:b :c]
-                                          [:in3 :c]
-                                          [:b :d] [:c :d]
-                                          [:d [:gte :out :a]]])
+       (wex/reduce-nodes-to-map-name->node
+        (wex/workflow->long-hand-workflow [[:in1 :a]
+                                           [:in2 :b]
+                                           [:a :b]
+                                           [:b :c]
+                                           [:in3 :c]
+                                           [:b :d] [:c :d]
+                                           [:d [:gte :out :a]]]))
        {:name :gte :to [nil :a]})))))
 
 (deftest complex-1
