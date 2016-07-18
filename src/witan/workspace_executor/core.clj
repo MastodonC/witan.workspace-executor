@@ -297,11 +297,11 @@
 (defprotocol IRouter
   (create!  [this])
   (replay! [this])
-  (state [this])
   (responsible? [this node-name])
-  (edge    [this]))
+  (label [this])
+  (state [this]))
 
-(deftype LinearRouter [name ^Node from ^Node to state]
+(deftype LinearRouter [label ^Node from ^Node to state]
   IRouter
   (create!  [this]
     (async/tap (get-in from [:outbound :mult])
@@ -317,9 +317,10 @@
     (async/>!! (get-in to [:inbound]) @state))
   (state [this]
     @state)
+  (label [this]
+    label)
   (responsible? [this node-name]
-    (= node-name (:name to)))
-  (edge   [this]))
+    (= node-name (:name to))))
 
 (defn port->node
   [port nodes]
@@ -356,8 +357,8 @@
       linear-routers))
   (replay! [this])
   (state [this])
-  (responsible? [this node-name])
-  (edge   [this]))
+  (label [this])
+  (responsible? [this node-name]))
 
 
 (defn gather-replay-edges
@@ -462,7 +463,7 @@
     node-name
     node)))
 
-(deftype PredicateRouter [name tos pred-node pred-replay-fn replay-routers]
+(deftype PredicateRouter [label tos pred-node pred-replay-fn replay-routers]
   IRouter
   (create!  [this]
     (let [tapped-pred-out (async/chan)
@@ -477,9 +478,10 @@
     (doseq [r replay-routers]
       (.replay! r)))
   (state [this])
+  (label [this]
+    label)
   (responsible? [this node-name]
-    (= node-name (:name pred-node)))
-  (edge    [this]))
+    (= node-name (:name pred-node))))
 
 (defn channel
   [with-channels c]
@@ -586,7 +588,7 @@
                                 (remove (=node-type :predicate)
                                         nodes)))
 
-        edge-name->router (reduce (fn [a r] (assoc a (.name r) r)) {} routers)
+        edge-name->router (reduce (fn [a r] (assoc a (label r) r)) {} routers)
         predicate-routers (mapcat 
                            (partial create-predicate-router name->node edge-name->router)
                            (filter (=node-type :predicate) nodes))
@@ -599,7 +601,7 @@
      :ingress  ingress
      :egress   egress
      :routers  (reduce 
-                #(assoc %1 (.name %2) %2) edge-name->router predicate-routers)
+                #(assoc %1 (label %2) %2) edge-name->router predicate-routers)
      :invokers (reduce #(assoc %1 (:name (.node %2)) %2) {} invokers)
      :error-ch error-channel}))
 
