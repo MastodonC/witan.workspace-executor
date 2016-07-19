@@ -1,5 +1,7 @@
 (ns witan.workspace-executor.schema
-  (:require [schema.core :as s]))
+  (:require [schema.core :as s]
+            [witan.workspace-api :refer [WorkflowFnMetaData
+                                         WorkflowPredicateMetaData]]))
 
 (defn even-count?
   [x]
@@ -21,40 +23,12 @@
 (def Workflow
   [WorkflowNode])
 
-(def ContractOutput
-  {:witan/schema       s/Any
-   :witan/key          s/Keyword
-   :witan/display-name s/Str})
-
-(def ContractInput
-  {:witan/schema       s/Any
-   :witan/key          s/Keyword
-   :witan/display-name s/Str})
-
-(def ContractBase
-  {:witan/impl s/Keyword
-   :witan/fn   s/Keyword
-   :witan/version s/Str ;; TODO check semver
-   (s/optional-key :witan/params-schema) (s/maybe {s/Keyword s/Any})})
-
-(def ContractFn
-  (merge
-   ContractBase
-   {;:witan/outputs [ContractOutput]
-    (s/optional-key :witan/inputs) [ContractInput]}))
-
-(def ContractPred
-  (merge
-   ContractBase
-   {:witan/predicate? s/Bool
-    (s/optional-key :witan/inputs) [ContractInput]}))
-
 (def Contract
   (s/conditional
    :witan/predicate?
-   ContractPred
+   WorkflowPredicateMetaData
    :else
-   ContractFn))
+   WorkflowFnMetaData))
 
 (def CatalogEntry
   {:witan/name s/Keyword
