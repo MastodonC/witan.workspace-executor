@@ -9,7 +9,8 @@
                  [com.taoensso/timbre "4.3.1"]
                  [aero "0.2.0"]
                  [rhizome "0.2.5"]
-                 [prismatic/schema "1.1.0"]
-                 [witan.workspace-api "0.1.8"]]
+                 [prismatic/schema "1.1.2"]
+                 [witan.workspace-api "0.1.11"]]
+  :profiles {:uberjar {:aot :all}}
   :repositories [["releases" {:url "https://clojars.org/repo"
                               :creds :gpg}]])

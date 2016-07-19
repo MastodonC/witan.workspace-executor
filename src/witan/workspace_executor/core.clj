@@ -219,7 +219,7 @@
                    catalog)
                   [:witan/fn :witan/version :witan/params])
         func (select-one*
-              [(filterer #(= (:witan/fn %)
+              [(filterer #(= (:witan/name %)
                              (:witan/fn fn-label))
                          #(= (:witan/version %)
                              (:witan/version fn-label)))
