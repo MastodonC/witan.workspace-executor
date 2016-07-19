@@ -283,7 +283,6 @@
         (if (seq remaining-chs')
           (recur remaining-chs' acc')
           (do
-            ;;(prn "Outputting to" to)
             (async/>! (:inbound to) acc')
             (recur (set merge-nodes) {}))))))
   IRouter
