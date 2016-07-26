@@ -749,3 +749,8 @@
            IllegalArgumentException
            #"^One or more catalog entries are duplicated: .*"
            (s/with-fn-validation (wex/validate-workspace workspace)))))))
+
+(deftest viewing-test
+  (testing "does a workflow produce valid graphviz?"
+    (let [result (wex/workflow->graphviz [[:a :b] [:b :c]])]
+      (is (= {:a '(:b), :b '(:c), :c '()} result)))))

@@ -553,7 +553,7 @@
   [wf :- as/Workflow]
   (->> wf
        (workflow->long-hand-workflow)
-       (map (fn [[k v]] [k (:to v)]))
+       (map (fn [node] [(:name node) (:to node)]))
        (reduce (fn [a [from to]] (update a from concat to)) {})))
 
 (s/defn view-workflow
