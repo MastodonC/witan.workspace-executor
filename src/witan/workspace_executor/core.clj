@@ -8,7 +8,7 @@
                      END ALL LAST FIRST VAL BEGINNING STOP]]
             [rhizome.viz :as viz]
             [taoensso.timbre :as log]
-            [witan.workspace-executor.schema :as as]
+            [witan.workspace-api.schema :as as]
             [witan.workspace-executor.utils :as utils]))
 
 (defn- get-catalog-entry
@@ -52,7 +52,7 @@
   (= target-of label))
 
 (s/defn workflow->long-hand-workflow
-  [wf :- as/Workflow]
+  [wf :- [as/WorkflowNode]]
   (let [fnc-froms   (fn [k ws]
                       (->> ws
                            (remove (partial predicate-are-target-of ((comp :target-of k) ws)))
@@ -550,13 +550,13 @@
 
 
 (s/defn workflow->graphviz
-  [wf :- as/Workflow]
+  [wf :- [as/WorkflowNode]]
   (->> wf
        (workflow->long-hand-workflow)
        (map (fn [node] [(:name node) (:to node)]))
        (reduce (fn [a [from to]] (update a from concat to)) {})))
 
 (s/defn view-workflow
-  [wf :- as/Workflow]
+  [wf :- [as/WorkflowNode]]
   (let [g (workflow->graphviz wf)]
     (viz/view-graph (keys g) g :node->descriptor (fn [n] {:label n}))))
