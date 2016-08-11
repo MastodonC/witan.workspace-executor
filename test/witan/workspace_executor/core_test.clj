@@ -3,7 +3,7 @@
             [schema.core :as s]
             [witan.workspace-executor.core :as wex]
             [witan.workspace-api :refer :all]
-            [witan.workspace-api.utils :refer [map-meta]]))
+            [witan.workspace-api.utils :refer [map-fn-meta]]))
 
 (def FooNumber
   s/Num)
@@ -106,7 +106,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def contracts
-  (map-meta
+  (map-fn-meta
    inc*
    mul2
    mulX
