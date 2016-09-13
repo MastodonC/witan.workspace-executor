@@ -10,7 +10,7 @@
                  [aero "0.2.0"]
                  [rhizome "0.2.5"]
                  [prismatic/schema "1.1.2"]
-                 [witan.workspace-api "0.1.18"]]
+                 [witan.workspace-api "0.1.19"]]
   :profiles {:uberjar {:aot :all}}
   :repositories [["releases" {:url "https://clojars.org/repo"
                               :creds :gpg}]])

@@ -131,8 +131,9 @@
                 (comp
                  (keep (fn [node] (some #(when (= (:witan/name %) node) ((juxt :witan/fn :witan/version) %)) catalog)))
                  (keep (fn [[fn-name fn-version]]
-                         (some #(when-not (or (= (:witan/fn %) fn-name)
-                                              (= (:witan/version %) fn-version)) [fn-name fn-version]) contracts))))
+                         (let [results (filter #(= (:witan/name %) fn-name) contracts)
+                               results2 (some #(when (= (:witan/version %) fn-version) %) results)]
+                           (when-not results2 [fn-name fn-version])))))
                 workflow*)]
       (when (not-empty missing-contracts)
         (throw
