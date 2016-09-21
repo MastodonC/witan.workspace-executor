@@ -26,24 +26,47 @@
   [{:keys [number]} _]
   {:number (inc number)})
 
+(defworkflowfn inc2*
+  {:witan/name :test.fn/inc2
+   :witan/version "1.0.0"
+   :witan/input-schema  {:number s/Num}
+   :witan/output-schema {:number2 s/Num}}
+  [{:keys [number]} _]
+  {:number2 (inc number)})
+
+(defworkflowfn inc3*
+  {:witan/name :test.fn/inc3
+   :witan/version "1.0.0"
+   :witan/input-schema  {:number s/Num}
+   :witan/output-schema {:number s/Str}}
+  [{:keys [number]} _]
+  {:number (str (inc number))})
+
 (defworkflowfn mul2
   {:witan/name :test.fn/mul2
    :witan/version "1.0.0"
    :witan/input-schema  {:number s/Num}
-   :witan/output-schema {:* s/Num}
-   :witan/param-schema {:as s/Keyword}}
-  [{:keys [number]} {:keys [as] :or {as :number}}]
-  (hash-map as (* number 2)))
+   :witan/output-schema {:number s/Num}}
+  [{:keys [number]} _]
+  {:number (* number 2)})
 
 (defworkflowfn mulX
   {:witan/name :test.fn/mulX
    :witan/version "1.0.0"
    :witan/input-schema  {:number s/Num}
-   :witan/output-schema {:* s/Num}
-   :witan/param-schema  {:x s/Num
-                         :as s/Keyword}}
-  [{:keys [number]} {:keys [x as] :or {as :number}}]
-  (hash-map as (* number x)))
+   :witan/output-schema {:number s/Num}
+   :witan/param-schema  {:x s/Num}}
+  [{:keys [number]} {:keys [x]}]
+  {:number (* number x)})
+
+(defworkflowfn mulX-to-add
+  {:witan/name :test.fn/mulX-to-add
+   :witan/version "1.0.0"
+   :witan/input-schema  {:number s/Num}
+   :witan/output-schema {:to-add s/Num}
+   :witan/param-schema  {:x s/Num}}
+  [{:keys [number]} {:keys [x]}]
+  {:to-add (* number x)})
 
 (defworkflowfn add
   {:witan/name :test.fn/add
@@ -78,22 +101,29 @@
   [{:keys [number]} _]
   (> number 10))
 
-(defworkflowfn param-spitter ;; TODO use defworkflowinput
-  {:witan/name :test.in/param-spitter
+(definput param-spitter-number
+  {:witan/name :test.in/param-spitter-number
    :witan/version "1.0.0"
-   :witan/input-schema {:* s/Any}
-   :witan/output-schema {:* s/Any}
-   :witan/param-schema {:* s/Any}}
-  [_ params]
-  params)
+   :witan/key :number
+   :witan/schema s/Num})
 
-(defworkflowfn msg-spitter
-  {:witan/name :test.out/msg-spitter
+(definput param-spitter-to-add
+  {:witan/name :test.in/param-spitter-to-add
    :witan/version "1.0.0"
-   :witan/input-schema {:* s/Any}
-   :witan/output-schema {:* s/Any}}
-  [msg params]
-  msg)
+   :witan/key :to-add
+   :witan/schema s/Num})
+
+(definput param-spitter-foo
+  {:witan/name :test.in/param-spitter-foo
+   :witan/version "1.0.0"
+   :witan/key :foo
+   :witan/schema s/Str})
+
+(defworkflowoutput out-spitter-number
+  {:witan/name :test.out/out-spitter-number
+   :witan/version "1.0.0"
+   :witan/input-schema {:number s/Num}}
+  [d _] d)
 
 (defworkflowpred gte
   {:witan/name :test.pred/gte
@@ -108,14 +138,19 @@
 (def contracts
   (map-fn-meta
    inc*
+   inc2*
+   inc3*
    mul2
    mulX
+   mulX-to-add
    add
    rename
    ->str
    finish?
-   param-spitter
-   msg-spitter
+   param-spitter-number
+   param-spitter-to-add
+   param-spitter-foo
+   out-spitter-number
    gte))
 
 (deftest workflow->long-hand-workflow
@@ -234,16 +269,17 @@
   (testing "Very basic workspace"
     (let [workflow [[:in :a] [:a :out]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :input
-                    :witan/params {:number 1}}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/version "1.0.0"
                     :witan/type :function}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :output}]
           workspace {:workflow  workflow
@@ -258,20 +294,21 @@
   (testing "Basic workspace that has multiple outputs"
     (let [workflow [[:in :a] [:a :out] [:a :out2]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
-                    :witan/params {:number 1}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}
                     :witan/type :input}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/version "1.0.0"
                     :witan/type :function}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :output}
                    {:witan/name :out2
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :output}]
           workspace {:workflow  workflow
@@ -286,21 +323,23 @@
   (testing "Basic test that merges"
     (let [workflow [[:in :a] [:in2 :a] [:a :out]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
-                    :witan/params {:number 1}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}
                     :witan/type :input}
                    {:witan/name :in2
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-to-add
                     :witan/version "1.0.0"
-                    :witan/params {:to-add 2}
+                    :witan/params {:fn (constantly 2)
+                                   :src "foo"}
                     :witan/type :function}
                    {:witan/name :a
                     :witan/fn :test.fn/add
                     :witan/version "1.0.0"
                     :witan/type :function}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :output}]
           workspace {:workflow  workflow
@@ -309,16 +348,17 @@
           workspace' (s/with-fn-validation (wex/build! workspace))
           result (wex/run!! workspace' {})]
       (is result)
-      (is (= [{:number 3 :to-add 2}] result)))))
+      (is (= [{:number 3}] result)))))
 
 (deftest diamond-test
   (testing "Workspace creates a diamond shape (fan then merge)"
     (let [workflow [[:in :a] [:a :b] [:a :c] [:b :d] [:c :d] [:d :out]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:number 1}}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/type :function
@@ -326,19 +366,18 @@
                    {:witan/name :b
                     :witan/fn :test.fn/mul2
                     :witan/type :function
-                    :witan/version "1.0.0"
-                    :witan/params {:as :blah}}
+                    :witan/version "1.0.0"}
                    {:witan/name :c
-                    :witan/fn :test.fn/mulX
+                    :witan/fn :test.fn/mulX-to-add
                     :witan/type :function
                     :witan/version "1.0.0"
-                    :witan/params {:x 3 :as :bliz}}
+                    :witan/params {:x 3}}
                    {:witan/name :d
-                    :witan/fn :test.fn/inc
+                    :witan/fn :test.fn/add
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/type :output
                     :witan/version "1.0.0"}]
           workspace {:workflow  workflow
@@ -347,16 +386,17 @@
           workspace' (s/with-fn-validation (wex/build! workspace))
           result (wex/run!! workspace' {})]
       (is result)
-      (is (= result [{:number 3 :blah 4 :bliz 6}])))))
+      (is (= result [{:number 10}])))))
 
 (deftest simple-loop
   (testing "Very basic workspace"
     (let [workflow [[:in :a] [:a [:gte :out :a]]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:number 1}}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}}
                    {:witan/name :gte
                     :witan/fn :test.pred/gte
                     :witan/version "1.0.0"
@@ -367,7 +407,7 @@
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/type :output
                     :witan/version "1.0.0"}]
           workspace {:workflow  workflow
@@ -461,33 +501,41 @@
   (testing "Merge within a loop"
     (let [workflow [[:in1 :a]
                     [:in2 :b]
-                    [:a :b]
-                    [:b [:gte :out :a]]]
+                    [:b :c]
+                    [:a :c]
+                    [:c [:gte :out :a]]]
           catalog [{:witan/name :in1
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:number 1}}
+                    :witan/params {:fn (constantly 1)
+                                   :src "foo"}}
                    {:witan/name :in2
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:foo :bar}}
+                    :witan/params {:fn (constantly 4)
+                                   :src "foo"}}
                    {:witan/name :gte
                     :witan/fn :test.pred/gte
                     :witan/type :predicate
                     :witan/version "1.0.0"
-                    :witan/params {:threshold 10}}
+                    :witan/params {:threshold 15}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :b
-                    :witan/fn :test.fn/inc
+                    :witan/fn :test.fn/mulX-to-add
+                    :witan/type :function
+                    :witan/version "1.0.0"
+                    :witan/params {:x 3}}
+                   {:witan/name :c
+                    :witan/fn :test.fn/add
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/type :output
                     :witan/version "1.0.0"}]
           workspace {:workflow  workflow
@@ -496,21 +544,22 @@
           workspace' (s/with-fn-validation (wex/build! workspace))
           result (wex/run!! workspace' {})]
       (is result)
-      (is (= [{:number 11 :foo :bar}] result)))))
+      (is (= [{:number 27}] result)))))
 
 (deftest param-replacement-needing-no-replay
   (let [workflow [[:in :a] [:a :out]]
         catalog [{:witan/name :in
-                  :witan/fn :test.in/param-spitter
+                  :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:number 1}}
+                  :witan/params {:fn (constantly 1)
+                                 :src "foo"}}
                  {:witan/name :a
                   :witan/fn :test.fn/inc
                   :witan/type :function
                   :witan/version "1.0.0"}
                  {:witan/name :out
-                  :witan/fn :test.out/msg-spitter
+                  :witan/fn :test.out/out-spitter-number
                   :witan/type :output
                   :witan/version "1.0.0"}]
         workspace {:workflow  workflow
@@ -525,7 +574,8 @@
                              #(cons
                                (assoc (first %)
                                       :witan/params
-                                      {:number 10})
+                                      {:fn (constantly 10)
+                                       :src "foo"})
                                (rest %)))
           workspace-network' (wex/update-network! workspace-network workspace' [:in])
           result' (wex/run!! workspace-network' {})]
@@ -538,15 +588,15 @@
                   :witan/type :function
                   :witan/fn :test.fn/mulX
                   :witan/version "1.0.0"
-                  :witan/params {:x 2
-                                 :as :number}}
+                  :witan/params {:x 2}}
                  {:witan/name :in
-                  :witan/fn :test.in/param-spitter
+                  :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:number 1}}
+                  :witan/params {:fn (constantly 1)
+                                 :src "foo"}}
                  {:witan/name :out
-                  :witan/fn :test.out/msg-spitter
+                  :witan/fn :test.out/out-spitter-number
                   :witan/type :output
                   :witan/version "1.0.0"}]
         workspace {:workflow  workflow
@@ -561,8 +611,7 @@
                              #(cons
                                (assoc (first %)
                                       :witan/params
-                                      {:x 10
-                                       :as :number})
+                                      {:x 10})
                                (rest %)))
           workspace-network' (wex/update-network! workspace-network workspace' [:m])
           _ (wex/replay-nodes! workspace-network' [:m])
@@ -582,12 +631,13 @@
                   :witan/type :function
                   :witan/version "1.0.0"}
                  {:witan/name :in
-                  :witan/fn :test.in/param-spitter
+                  :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:number 1}}
+                  :witan/params {:fn (constantly 1)
+                                 :src "foo"}}
                  {:witan/name :out
-                  :witan/fn :test.out/msg-spitter
+                  :witan/fn :test.out/out-spitter-number
                   :witan/type :output
                   :witan/version "1.0.0"}]
         workspace {:workflow  workflow
@@ -614,7 +664,7 @@
   (testing "Basic workflow throws exception"
     (let [workflow [[:in :a] [:a :out]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
                     :witan/params {:foo 1}}
@@ -623,7 +673,7 @@
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/type :output
                     :witan/version "1.0.0"}]
           workspace {:workflow  workflow
@@ -639,16 +689,17 @@
   (testing "Basic workflow throws exception"
     (let [workflow [[:in :a] [:a :out]]
           catalog [{:witan/name :in
-                    :witan/fn :test.in/param-spitter
+                    :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:foo 1}}
+                    :witan/params {:fn inc
+                                   :src "foo"}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/type :function
                     :witan/version "1.0.0"}
                    {:witan/name :out
-                    :witan/fn :test.out/msg-spitter
+                    :witan/fn :test.out/out-spitter-number
                     :witan/type :output
                     :witan/version "1.0.0"}]
           workspace {:workflow  workflow
@@ -664,7 +715,8 @@
                                #(cons
                                  (assoc (first %)
                                         :witan/params
-                                        {:number 1})
+                                        {:fn (constantly 1)
+                                         :src "foo"})
                                  (rest %)))
             workspace-network' (wex/update-network! workspace-network workspace' [:in])
             result' (wex/run!! workspace-network' {})]
@@ -718,56 +770,66 @@
       (is (thrown-with-msg?
            IllegalArgumentException
            #"^There are no contracts for the following function \+ version combinations: .*"
-           (s/with-fn-validation (wex/validate-workspace workspace))))));; TODO
-  #_(testing "Invalid - no input fulfilment - no upstream, input will not be fulfilled"
-      (let [workspace {:workflow [[:a :c] [:b :c]]
-                       :catalog [{:witan/name :a
-                                  :witan/fn :test.fn/inc :witan/type :function
-                                  :witan/version "1.0.0"}
-                                 {:witan/name :b
-                                  :witan/fn :test.fn/mul2 :witan/type :function
-                                  :witan/version "1.0.0"}
-                                 {:witan/name :c
-                                  :witan/fn :test.fn/add
-                                  :witan/version "1.0.0"
-                                  :witan/inputs [{:witan/input-src-key :number}
-                                                 {:witan/input-src-key :to-add}]}]
-                       :contracts contracts}]
-        (is (thrown-with-msg?
-             IllegalArgumentException
-             #"The following nodes will not receive the required inputs from their parent nodes: .*"
-             (s/with-fn-validation (wex/validate-workspace workspace))))))
-  ;; TODO
-  #_(testing "Invalid - no input fulfilment - has upstream but doesn't fulfil"
-      (let [workspace {:workflow [[:a :c]]
-                       :catalog [{:witan/name :a
-                                  :witan/fn :test.fn/inc :witan/type :function
-                                  :witan/version "1.0.0"}
-                                 {:witan/name :c
-                                  :witan/fn :test.fn/add
-                                  :witan/version "1.0.0"}] ;; <<< Nothing fulfils :to-add
-                       :contracts contracts}]
-        (is (thrown-with-msg?
-             IllegalArgumentException
-             #"The following nodes will not receive the required inputs from their parent nodes: .*"
-             (s/with-fn-validation (wex/validate-workspace workspace))))))
-  ;; TODO
-  #_(testing "Invalid - no input fulfilment - inputs will clash"
-      (let [workspace {:workflow [[:a :c] [:b :c]]
-                       :catalog [{:witan/name :a
-                                  :witan/fn :test.fn/inc :witan/type :function
-                                  :witan/version "1.0.0"}
-                                 {:witan/name :b
-                                  :witan/fn :test.fn/mul2 :witan/type :function
-                                  :witan/version "1.0.0"}
-                                 {:witan/name :c
-                                  :witan/fn :test.fn/inc :witan/type :function
-                                  :witan/version "1.0.0"}] ;; <<< Both :a and :b provide 'number' - suggest output mapping.
-                       :contracts contracts}]
-        (is (thrown-with-msg?
-             IllegalArgumentException
-             #"^The following nodes will experience a clash of inputs from their parents \(consider using output mappings\): .*"
-             (s/with-fn-validation (wex/validate-workspace workspace))))))
+           (s/with-fn-validation (wex/validate-workspace workspace))))))
+
+  (testing "Invalid - no input fulfilment @ key level - no upstream, input will not be fulfilled"
+    (let [workspace {:workflow [[:a :c] [:b :c]]
+                     :catalog [{:witan/name :a
+                                :witan/fn :test.fn/inc
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :b
+                                :witan/fn :test.fn/inc2
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :c
+                                :witan/fn :test.fn/add
+                                :witan/type :function
+                                :witan/version "1.0.0"}]
+                     :contracts contracts}]
+      (is (thrown-with-msg?
+           IllegalArgumentException
+           #"The following nodes will not receive the required inputs from their parent nodes: .*"
+           (s/with-fn-validation (wex/validate-workspace workspace))))))
+
+  (testing "Invalid - no input fulfilment @ schema level - no upstream, input will not be fulfilled"
+    (let [workspace {:workflow [[:a :c] [:b :c]]
+                     :catalog [{:witan/name :a
+                                :witan/fn :test.fn/inc
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :b
+                                :witan/fn :test.fn/inc3
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :c
+                                :witan/fn :test.fn/add
+                                :witan/type :function
+                                :witan/version "1.0.0"}]
+                     :contracts contracts}]
+      (is (thrown-with-msg?
+           IllegalArgumentException
+           #"The following nodes will not receive the required inputs from their parent nodes: .*"
+           (s/with-fn-validation (wex/validate-workspace workspace))))))
+  (testing "Invalid - no input fulfilment - inputs will clash"
+    (let [workspace {:workflow [[:a :c] [:b :c]]
+                     :catalog [{:witan/name :a
+                                :witan/fn :test.fn/inc
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :b
+                                :witan/fn :test.fn/inc
+                                :witan/type :function
+                                :witan/version "1.0.0"}
+                               {:witan/name :c
+                                :witan/fn :test.fn/inc
+                                :witan/type :function
+                                :witan/version "1.0.0"}] ;; <<< Both :a and :b provide 'number' - suggest output mapping.
+                     :contracts contracts}]
+      (is (thrown-with-msg?
+           IllegalArgumentException
+           #"^The following nodes will experience a clash of inputs from their parents: .*"
+           (s/with-fn-validation (wex/validate-workspace workspace))))))
 
   (testing "Invalid  - duplicates in the catalog"
     (let [workspace {:workflow [[:a :b]]
