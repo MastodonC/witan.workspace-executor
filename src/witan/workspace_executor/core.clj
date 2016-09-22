@@ -20,7 +20,7 @@
   (let [catalog-entry          (get-catalog-entry catalog id)
         fnc                    (:witan/fn catalog-entry)
         version                (:witan/version catalog-entry)]
-    (some #(when (and (= (:witan/fn %) fnc) (= (:witan/version %) version)) %) contracts)))
+    (some #(when (and (= (:witan/name %) fnc) (= (:witan/version %) version)) %) contracts)))
 
 (def branch?
   #(and (vector? %) (= 3 (count %))))
@@ -90,13 +90,13 @@
         nodes (workflow->long-hand-workflow workflow)
         outputs-from-parents-fn
         (fn [from]
-          (mapcat (fn [x]
-                    (let [parent-ce          (get-catalog-entry catalog x)
-                          parent-contract    (get-contract workspace x)
-                          parent-con-outputs (set (map :witan/key
-                                                       (:witan/output-schema parent-contract)))]
-                      (mapcat keys parent-con-outputs)))
-                  from))]
+          (into {}
+                (map (fn [x]
+                       (let [parent-ce          (get-catalog-entry catalog x)
+                             parent-contract    (get-contract workspace x)
+                             parent-con-outputs (:witan/output-schema parent-contract)]
+                         (hash-map x parent-con-outputs)))
+                     from)))]
     ;;
     ;; Does the catalog have duplicates?
     ;;
@@ -141,46 +141,55 @@
           (str "There are no contracts for the following function + version combinations: " missing-contracts)))))
 
     ;;
-    ;; TODO Will each node have its inputs provided by a parent?
+    ;; Will each node have its inputs provided by a parent?
     ;;
-    #_(let [missing-inputs-from-parents
-            (into []
-                  (keep (fn [[k node]]
-                          (let [ce       (get-catalog-entry catalog k)
+    (let [missing-inputs-from-parents
+          (into []
+                (keep (fn [{:keys [from] :as node}]
+                        (when from
+                          (let [k        (:name node)
+                                ce       (get-catalog-entry catalog k)
                                 contract (get-contract workspace k)
-                                inputs   (map :witan/key (:witan/inputs contract))
-                                outputs-from-parents (when (:from node) (outputs-from-parents-fn (:from node)))
-                                inputs-from-ext (keep (fn [{:keys [witan/input-src-key
-                                                                   witan/input-dest-key
-                                                                   witan/input-src-fn]}]
-                                                        (when input-src-fn
-                                                          input-dest-key)) (:witan/inputs ce))
-                                diff (clojure.set/difference (set inputs) (set (concat inputs-from-ext outputs-from-parents)))]
+                                inputs   (:witan/input-schema contract)
+                                outputs-from-parents (outputs-from-parents-fn from)
+                                outputs' (->> outputs-from-parents
+                                              (map second)
+                                              (apply merge)
+                                              (map identity)
+                                              (set))
+                                inputs' (->> inputs
+                                             (map identity)
+                                             (set))
+                                diff (clojure.set/difference inputs' outputs')]
                             (when (not-empty diff)
-                              (hash-map k diff)))))
-                  nodes)]
-        (when (not-empty missing-inputs-from-parents)
-          (throw
-           (IllegalArgumentException.
-            (str "The following nodes will not receive the required inputs from their parent nodes: " missing-inputs-from-parents)))))
+                              (hash-map k diff))))))
+                nodes)]
+      (when (not-empty missing-inputs-from-parents)
+        (throw
+         (IllegalArgumentException.
+          (str "The following nodes will not receive the required inputs from their parent nodes: " missing-inputs-from-parents)))))
 
     ;;
-    ;; TODO When two or more workflow nodes converge to provide outputs, will there be a clash of keys?
+    ;; When two or more workflow nodes converge to provide outputs, will there be a clash of keys?
     ;;
-    #_(let [clashing-outputs
-            (into []
-                  (comp
-                   (filter (fn [[k node]]
-                             (> (count (:from node)) 1)))
-                   (keep   (fn [[k {:keys [from]}]]
-                             (let [parent-outputs (outputs-from-parents-fn from)]
-                               (when-not (= (count (set parent-outputs)) (count parent-outputs))
-                                 (hash-map k parent-outputs))))))
-                  nodes)]
-        (when (not-empty clashing-outputs)
-          (throw
-           (IllegalArgumentException.
-            (str "The following nodes will experience a clash of inputs from their parents (consider using output mappings): " clashing-outputs)))))))
+    (let [clashing-outputs
+          (into []
+                (comp
+                 (filter (fn [{:keys [from] :as node}]
+                           (> (count from) 1)))
+                 (keep   (fn [{:keys [from] :as node}]
+                           (let [k        (:name node)
+                                 parent-outputs (outputs-from-parents-fn from)
+                                 outputs (reduce (fn [a [node-name node-inputs]]
+                                                   (reduce (fn [a' [k s]]
+                                                             (update a' k conj node-name)) a node-inputs)) {} parent-outputs)]
+                             (when (some (fn [[k nodes]] (when (> (count nodes) 1) k)) outputs)
+                               (hash-map k outputs))))))
+                nodes)]
+      (when (not-empty clashing-outputs)
+        (throw
+         (IllegalArgumentException.
+          (str "The following nodes will experience a clash of inputs from their parents: " clashing-outputs)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -299,22 +308,22 @@
         pred-ky (:name node)
         visited (atom [])]
     (letfn [(descend [from target]
-                     (swap! visited conj from target)
-                     (let [target-of-loop (get-in with-channels [target :target-of])
-                           froms (remove #{from}
-                                         (get-in with-channels [target :from]))]
-                       (concat (mapv #(vector % target) froms)
-                               (if (and target-of-loop (not= target-of-loop pred-ky))
-                                 (mapcat (partial descend target-of-loop)
-                                         (remove (set @visited)
-                                                 (get-in with-channels [target-of-loop :to])))
-                                 (mapcat (partial descend target)
-                                         (remove (conj (set @visited) pred-ky)
-                                                 (get-in with-channels [target :to])))))))]
+              (swap! visited conj from target)
+              (let [target-of-loop (get-in with-channels [target :target-of])
+                    froms (remove #{from}
+                                  (get-in with-channels [target :from]))]
+                (concat (mapv #(vector % target) froms)
+                        (if (and target-of-loop (not= target-of-loop pred-ky))
+                          (mapcat (partial descend target-of-loop)
+                                  (remove (set @visited)
+                                          (get-in with-channels [target-of-loop :to])))
+                          (mapcat (partial descend target)
+                                  (remove (conj (set @visited) pred-ky)
+                                          (get-in with-channels [target :to])))))))]
       (let [r (mapcat (partial descend loop-target)
                       (remove #{pred-ky}
                               (get-in with-channels [loop-target :to])))]
-        (remove #((set @visited) (first %)) r)))))
+        (set (remove #((set @visited) (first %)) r))))))
 
 (defn edge->router
   [routers edge]
