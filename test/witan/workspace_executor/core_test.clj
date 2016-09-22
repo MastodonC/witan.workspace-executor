@@ -113,12 +113,6 @@
    :witan/key :to-add
    :witan/schema s/Num})
 
-(definput param-spitter-foo
-  {:witan/name :test.in/param-spitter-foo
-   :witan/version "1.0.0"
-   :witan/key :foo
-   :witan/schema s/Str})
-
 (defworkflowoutput out-spitter-number
   {:witan/name :test.out/out-spitter-number
    :witan/version "1.0.0"
@@ -132,6 +126,10 @@
    :witan/param-schema {:threshold s/Num}}
   [msg params]
   (>= (:number msg) (:threshold params)))
+
+(defn coerce-string
+  [x _]
+  (read-string x))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -149,7 +147,6 @@
    finish?
    param-spitter-number
    param-spitter-to-add
-   param-spitter-foo
    out-spitter-number
    gte))
 
@@ -272,8 +269,8 @@
                     :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
                     :witan/type :input
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/version "1.0.0"
@@ -296,8 +293,8 @@
           catalog [{:witan/name :in
                     :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}
                     :witan/type :input}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
@@ -325,14 +322,14 @@
           catalog [{:witan/name :in
                     :witan/fn :test.in/param-spitter-number
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}
                     :witan/type :input}
                    {:witan/name :in2
                     :witan/fn :test.in/param-spitter-to-add
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 2)
-                                   :src "foo"}
+                    :witan/params {:fn coerce-string
+                                   :src "2"}
                     :witan/type :function}
                    {:witan/name :a
                     :witan/fn :test.fn/add
@@ -357,8 +354,8 @@
                     :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}}
                    {:witan/name :a
                     :witan/fn :test.fn/inc
                     :witan/type :function
@@ -395,8 +392,8 @@
                     :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}}
                    {:witan/name :gte
                     :witan/fn :test.pred/gte
                     :witan/version "1.0.0"
@@ -508,14 +505,14 @@
                     :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 1)
-                                   :src "foo"}}
+                    :witan/params {:fn coerce-string
+                                   :src "1"}}
                    {:witan/name :in2
                     :witan/fn :test.in/param-spitter-number
                     :witan/type :input
                     :witan/version "1.0.0"
-                    :witan/params {:fn (constantly 4)
-                                   :src "foo"}}
+                    :witan/params {:fn coerce-string
+                                   :src "4"}}
                    {:witan/name :gte
                     :witan/fn :test.pred/gte
                     :witan/type :predicate
@@ -552,8 +549,8 @@
                   :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:fn (constantly 1)
-                                 :src "foo"}}
+                  :witan/params {:fn coerce-string
+                                 :src "1"}}
                  {:witan/name :a
                   :witan/fn :test.fn/inc
                   :witan/type :function
@@ -574,8 +571,8 @@
                              #(cons
                                (assoc (first %)
                                       :witan/params
-                                      {:fn (constantly 10)
-                                       :src "foo"})
+                                      {:fn coerce-string
+                                       :src "10"})
                                (rest %)))
           workspace-network' (wex/update-network! workspace-network workspace' [:in])
           result' (wex/run!! workspace-network' {})]
@@ -593,8 +590,8 @@
                   :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:fn (constantly 1)
-                                 :src "foo"}}
+                  :witan/params {:fn coerce-string
+                                 :src "1"}}
                  {:witan/name :out
                   :witan/fn :test.out/out-spitter-number
                   :witan/type :output
@@ -634,8 +631,8 @@
                   :witan/fn :test.in/param-spitter-number
                   :witan/type :input
                   :witan/version "1.0.0"
-                  :witan/params {:fn (constantly 1)
-                                 :src "foo"}}
+                  :witan/params {:fn coerce-string
+                                 :src "1"}}
                  {:witan/name :out
                   :witan/fn :test.out/out-spitter-number
                   :witan/type :output
@@ -715,8 +712,8 @@
                                #(cons
                                  (assoc (first %)
                                         :witan/params
-                                        {:fn (constantly 1)
-                                         :src "foo"})
+                                        {:fn coerce-string
+                                         :src "1"})
                                  (rest %)))
             workspace-network' (wex/update-network! workspace-network workspace' [:in])
             result' (wex/run!! workspace-network' {})]
