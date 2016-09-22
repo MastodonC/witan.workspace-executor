@@ -422,7 +422,7 @@
   (testing "Tightest loop detection"
     (is
      (=
-      []
+      #{}
       (wex/gather-replay-edges
        (wex/workflow->long-hand-workflow [[:in :a]
                                           [:a [:gte :out :a]]])
@@ -430,7 +430,7 @@
   (testing "Tight loop detection"
     (is
      (=
-      [[:in2 :b]]
+      #{[:in2 :b]}
       (wex/gather-replay-edges
        (wex/reduce-nodes-to-map-name->node
         (wex/workflow->long-hand-workflow [[:in1 :a]
@@ -441,7 +441,7 @@
   (testing "Longer loop leg"
     (is
      (=
-      [[:in2 :b]]
+      #{[:in2 :b]}
       (wex/gather-replay-edges
        (wex/reduce-nodes-to-map-name->node
         (wex/workflow->long-hand-workflow [[:in1 :a]
@@ -453,7 +453,7 @@
   (testing "Inner loop"
     (is
      (=
-      [[:in2 :b]]
+      #{[:in2 :b]}
       (wex/gather-replay-edges
        (wex/reduce-nodes-to-map-name->node
         (wex/workflow->long-hand-workflow [[:in1 :a]
@@ -475,17 +475,17 @@
               [:c [:gtex :d :b]]
               [:d [:gte :out :a]]]))]
     (testing "Outer loop check should not include merges of inner"
-      (is (= [[:in2 :b] [:in4 :b]]
+      (is (= #{[:in2 :b] [:in4 :b]}
              (wex/gather-replay-edges wf   {:name :gte :to [nil :a]}))))
     (testing "Inner loop check should not include merges of outer"
-      (is (= [[:in3 :c]]
+      (is (= #{[:in3 :c]}
              (wex/gather-replay-edges wf   {:name :gtex :to [nil :b]}))))))
 
 (deftest internal-merge-loop
   (testing "Loop with an internal merge"
     (is
      (=
-      '([:in2 :b] [:in3 :c])
+      #{[:in2 :b] [:in3 :c]}
       (wex/gather-replay-edges
        (wex/reduce-nodes-to-map-name->node
         (wex/workflow->long-hand-workflow [[:in1 :a]
