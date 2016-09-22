@@ -308,22 +308,22 @@
         pred-ky (:name node)
         visited (atom [])]
     (letfn [(descend [from target]
-                     (swap! visited conj from target)
-                     (let [target-of-loop (get-in with-channels [target :target-of])
-                           froms (remove #{from}
-                                         (get-in with-channels [target :from]))]
-                       (concat (mapv #(vector % target) froms)
-                               (if (and target-of-loop (not= target-of-loop pred-ky))
-                                 (mapcat (partial descend target-of-loop)
-                                         (remove (set @visited)
-                                                 (get-in with-channels [target-of-loop :to])))
-                                 (mapcat (partial descend target)
-                                         (remove (conj (set @visited) pred-ky)
-                                                 (get-in with-channels [target :to])))))))]
+              (swap! visited conj from target)
+              (let [target-of-loop (get-in with-channels [target :target-of])
+                    froms (remove #{from}
+                                  (get-in with-channels [target :from]))]
+                (concat (mapv #(vector % target) froms)
+                        (if (and target-of-loop (not= target-of-loop pred-ky))
+                          (mapcat (partial descend target-of-loop)
+                                  (remove (set @visited)
+                                          (get-in with-channels [target-of-loop :to])))
+                          (mapcat (partial descend target)
+                                  (remove (conj (set @visited) pred-ky)
+                                          (get-in with-channels [target :to])))))))]
       (let [r (mapcat (partial descend loop-target)
                       (remove #{pred-ky}
                               (get-in with-channels [loop-target :to])))]
-        (remove #((set @visited) (first %)) r)))))
+        (set (remove #((set @visited) (first %)) r))))))
 
 (defn edge->router
   [routers edge]
