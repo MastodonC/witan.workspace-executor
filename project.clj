@@ -11,7 +11,7 @@
                  [rhizome "0.2.5"]
                  [prismatic/schema "1.1.2"]
                  [witan.workspace-api "0.1.22"]]
-  :warn-on-reflection true
+  :global-vars {*warn-on-reflection* true}
   :profiles {:uberjar {:aot :all}}
   :repositories [["releases" {:url "https://clojars.org/repo"
                               :creds :gpg}]])
