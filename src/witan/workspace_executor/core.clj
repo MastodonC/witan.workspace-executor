@@ -337,7 +337,7 @@
       true
       (do
         (doseq [router replay-routers]
-          (.replay! router))
+          (replay! router))
         false))))
 
 (deftype PredicateRouter [label tos pred-node pred-replay-fn replay-routers]
@@ -353,7 +353,7 @@
   IRouter
   (replay! [this]
     (doseq [r replay-routers]
-      (.replay! r)))
+      (replay! r)))
   (state [this])
   (label [this]
     label)
@@ -361,7 +361,8 @@
     (= node-name (:name pred-node))))
 
 (defprotocol IInvoker
-  (kill! [this]))
+  (kill! [this])
+  (get-node [this]))
 
 (deftype Invoker [node kill func]
   IActivatable
@@ -378,7 +379,9 @@
           (recur (async/alts! [in kill]))))))
   IInvoker
   (kill! [this]
-    (async/close! kill)))
+    (async/close! kill))
+  (get-node [_]
+    node))
 
 (deftype PredicateInvoker [node kill pred]
   IActivatable
@@ -395,7 +398,9 @@
           (recur (async/alts! [in kill]))))))
   IInvoker
   (kill! [this]
-    (async/close! kill)))
+    (async/close! kill))
+  (get-node [_]
+    node))
 
 (defmulti create-router
   "Returns a vector router connecting node to :from nodes"
@@ -512,7 +517,7 @@
      :egress   egress
      :routers  (reduce
                 #(assoc %1 (label %2) %2) edge-name->router predicate-routers)
-     :invokers (reduce #(assoc %1 (:name (.node %2)) %2) {} invokers)
+     :invokers (reduce #(assoc %1 (:name (get-node %2)) %2) {} invokers)
      :error-ch error-channel}))
 
 (defn await-results
