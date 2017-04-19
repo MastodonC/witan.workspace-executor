@@ -1,4 +1,4 @@
-(defproject witan.workspace-executor "0.2.7"
+(defproject witan.workspace-executor "0.2.8-SNAPSHOT"
   :description "The Workspace Executor"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
