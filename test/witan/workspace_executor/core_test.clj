@@ -261,7 +261,56 @@
                          :pred? nil,
                          :error-ch nil
                          :type :sink})]
-        (wex/workflow->long-hand-workflow [[:in :a] [:a [:gte :out :a]]])))))
+        (wex/workflow->long-hand-workflow [[:in :a] [:a [:gte :out :a]]]))))
+  (testing "Predicate workflow with long tail"
+    (is
+     (= [(wex/map->Node {:name :in,
+                         :outbound nil,
+                         :inbound nil,
+                         :from nil,
+                         :to [:a],
+                         :target-of nil,
+                         :pred? nil,
+                         :error-ch nil
+                         :type :source}),
+         (wex/map->Node {:name :a,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:in],
+                         :to [:gte],
+                         :target-of :gte
+                         :pred? nil,
+                         :error-ch nil
+                         :type :from-one})
+         (wex/map->Node {:name :gte,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:a],
+                         :to [:out :a],
+                         :target-of nil,
+                         :pred? true
+                         :error-ch nil
+                         :type :predicate}),
+         (wex/map->Node {:name :b,
+                         :outbound nil,
+                         :inbound nil,
+                         :from nil
+                         :to [:out],
+                         :target-of :gte
+                         :pred? nil,
+                         :error-ch nil
+                         :type :from-one})
+         (wex/map->Node {:name :out,
+                         :outbound nil,
+                         :inbound nil,
+                         :from [:b]
+                         :to nil,
+                         :target-of nil
+                         :pred? nil,
+                         :error-ch nil
+                         :type :sink})]
+        (wex/workflow->long-hand-workflow [[:in :a] [:a [:gte :b :a]] [:b :out]]))
+     "This demonstrates a bug where `:b` should *not* be listed as a `:type :source` because it actually has an upstream task `:a`")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
